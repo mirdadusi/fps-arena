@@ -4,8 +4,8 @@
 
 ### Spec 01 — Vite Build System (blocker for `npm run build`)
 - [x] Install `vite` and `three` as npm dependencies; add `dev` and `build` scripts to `package.json`; create `vite.config.js`
-- [ ] Migrate `index.html`: remove CDN importmap `<script type="importmap">`, update entry `<script>` to `type="module" src="/src/main.js"` so Vite can bundle it
-- [ ] Verify `npm run build` exits 0 and `dist/` is produced with no errors
+- [x] Migrate `index.html`: remove CDN importmap `<script type="importmap">`, update entry `<script>` to `type="module" src="/src/main.js"` so Vite can bundle it
+- [x] Verify `npm run build` exits 0 and `dist/` is produced with no errors
 
 ### Spec 05 — Stability & Performance
 - [ ] Add `<div id="loading-overlay">` (visible by default, CSS pulse) and `<div id="context-lost-overlay">` (hidden) and `<p id="pointer-lock-error">` (hidden) to `index.html`
