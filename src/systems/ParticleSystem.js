@@ -1,10 +1,17 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
 
+// Single shared geometry — all particle meshes reuse this one instance
+// instead of allocating a new BoxGeometry per particle.
+const _sharedGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
+
 /**
  * ParticleSystem — lightweight debris particles on impact.
  *
  * Pattern: Object Pool, managed lifecycle.
+ * Each particle gets its own MeshBasicMaterial (needed for per-particle
+ * opacity fade), but the geometry is shared to prevent GPU-buffer leaks.
+ * Materials are disposed individually when their particle expires.
  */
 export class ParticleSystem {
   #particles = [];
@@ -16,8 +23,8 @@ export class ParticleSystem {
   spawn(position, color, count = 8) {
     for (let i = 0; i < count; i++) {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.06, 0.06, 0.06),
-        new THREE.MeshBasicMaterial({ color }),
+        _sharedGeo,
+        new THREE.MeshBasicMaterial({ color, transparent: true }),
       );
       mesh.position.copy(position);
       this.scene.add(mesh);
@@ -42,8 +49,18 @@ export class ParticleSystem {
       p.mesh.material.opacity = p.life;
       if (p.life <= 0) {
         this.scene.remove(p.mesh);
+        p.mesh.material.dispose();
         this.#particles.splice(i, 1);
       }
     }
+  }
+
+  /** Dispose all active particles and free their materials. Call on game teardown. */
+  dispose() {
+    for (const p of this.#particles) {
+      this.scene.remove(p.mesh);
+      p.mesh.material.dispose();
+    }
+    this.#particles.length = 0;
   }
 }
