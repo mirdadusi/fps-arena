@@ -9,7 +9,7 @@
 
 ### Spec 05 — Stability & Performance
 - [ ] Add `<div id="loading-overlay">` (visible by default, CSS pulse) and `<div id="context-lost-overlay">` (hidden) and `<p id="pointer-lock-error">` (hidden) to `index.html`
-- [ ] Fix `BulletSystem` material leak: replace per-bullet `new THREE.MeshBasicMaterial({ color })` in the spawn path with a module-level `Map<number, Material>` pool; add a `dispose()` method that clears and disposes all pooled materials
+- [x] Fix `BulletSystem` material leak: replace per-bullet `new THREE.MeshBasicMaterial({ color })` in the spawn path with a module-level `Map<number, Material>` pool; add a `dispose()` method that clears and disposes all pooled materials
 - [ ] Fix `ParticleSystem` geometry leak: create a single shared `BoxGeometry` instance once and reuse it across all particles instead of `new THREE.BoxGeometry(...)` per effect
 - [ ] Add `webglcontextlost` / `webglcontextrestored` event listeners to `renderer.domElement` in `Arena.js`; show/hide `context-lost-overlay`; restart loop on restore
 - [ ] Add `pointerlockerror` event listener in `Game.js`; show `#pointer-lock-error` element when fired

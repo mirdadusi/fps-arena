@@ -1,6 +1,17 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
 
+// Module-level material pool — one MeshBasicMaterial per unique bullet colour.
+// Prevents a new material allocation on every shot.
+const _matPool = new Map();
+
+function _getOrCreateMat(color) {
+  if (!_matPool.has(color)) {
+    _matPool.set(color, new THREE.MeshBasicMaterial({ color }));
+  }
+  return _matPool.get(color);
+}
+
 /**
  * BulletSystem — object pool for bullets, movement, and hit detection.
  * Supports weapon-specific bullet speed/color.
@@ -8,8 +19,6 @@ import { Config } from '../Config.js';
 export class BulletSystem {
   #bullets = [];
   #geo = new THREE.SphereGeometry(0.08, 6, 6);
-  #matPlayer = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
-  #matEnemy  = new THREE.MeshBasicMaterial({ color: 0xff4444 });
 
   constructor(scene, physics) {
     this.scene = scene;
@@ -21,7 +30,7 @@ export class BulletSystem {
   spawn(origin, direction, isEnemy, weaponDef = null) {
     const speed = weaponDef?.bulletSpeed || Config.weapon.bulletSpeed;
     const color = isEnemy ? 0xff4444 : (weaponDef?.bulletColor || 0xffcc00);
-    const mat = new THREE.MeshBasicMaterial({ color });
+    const mat = _getOrCreateMat(color);
     const mesh = new THREE.Mesh(this.#geo, mat);
     mesh.position.copy(origin);
     mesh.add(new THREE.PointLight(color, 2, 4));
@@ -90,6 +99,14 @@ export class BulletSystem {
 
   clearAll() {
     for (let i = this.#bullets.length - 1; i >= 0; i--) this.#remove(i);
+  }
+
+  /** Dispose the shared geometry and all pooled materials. Call on game teardown. */
+  dispose() {
+    this.clearAll();
+    this.#geo.dispose();
+    for (const mat of _matPool.values()) mat.dispose();
+    _matPool.clear();
   }
 
   #remove(index) {
