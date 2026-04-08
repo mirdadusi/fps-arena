@@ -427,7 +427,7 @@
   }
   .touch-weapon-btn:active { border-color: #f80; color: #f80; }
 </style>
-  <script type="module" crossorigin src="./assets/index-CBPWSKyA.js"></script>
+  <script type="module" crossorigin src="./assets/index-CY5IIHa0.js"></script>
 </head>
 <body>
 
@@ -463,6 +463,7 @@
         <div class="skin-select" id="sp-skin"></div>
       </div>
       <button class="lobby-btn" id="btn-start-single">START GAME</button>
+      <button class="lobby-btn secondary" id="btn-settings" style="margin-top:8px;">⚙️ Settings</button>
     </div>
 
     <!-- Create Room -->
@@ -727,6 +728,8 @@
 <div id="game-over">
   <h1>YOU DIED</h1>
   <div class="go-stats" id="go-stats"></div>
+  <div id="go-personal-best" style="display:none;font-size:22px;color:#fc0;margin:8px 0;">🏆 New Personal Best!</div>
+  <div id="go-scoretable" style="margin:12px 0;"></div>
   <p>Click to respawn</p>
 </div>
 
@@ -772,5 +775,28 @@ window.addEventListener('unhandledrejection', e => {
   document.body.appendChild(d);
 });
 </script>
+
+<!-- Loading overlay (visible until game is ready) -->
+<div id="loading-overlay" style="position:fixed;inset:0;background:#0d0d13;display:flex;align-items:center;justify-content:center;z-index:500;flex-direction:column;">
+  <style>
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+    #loading-overlay p { animation: pulse 1.4s ease-in-out infinite; color:#f80; font-size:22px; font-family:sans-serif; }
+  </style>
+  <p>Loading Arena FPS…</p>
+</div>
+
+<!-- WebGL context-lost overlay (hidden by default) -->
+<div id="context-lost-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:600;align-items:center;justify-content:center;cursor:pointer;" onclick="location.reload()">
+  <p style="color:#f80;font-size:22px;font-family:sans-serif;text-align:center;">
+    ⚠️ GPU context lost<br>
+    <span style="font-size:15px;color:#aaa;">Click anywhere to reload</span>
+  </p>
+</div>
+
+<!-- Pointer-lock error message (hidden by default) -->
+<p id="pointer-lock-error" style="display:none;position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fc0;padding:10px 18px;border-radius:6px;font-family:sans-serif;font-size:14px;z-index:400;text-align:center;">
+  ⚠️ Pointer lock not available. Touch controls or keyboard/mouse without lock will still work.
+</p>
+
 </body>
 </html>

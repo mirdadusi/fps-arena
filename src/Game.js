@@ -263,6 +263,11 @@ export class Game {
       }
     });
 
+    document.addEventListener('pointerlockerror', () => {
+      const el = document.getElementById('pointer-lock-error');
+      if (el) el.style.display = 'block';
+    });
+
     document.addEventListener('mousedown', e => {
       if (this.#chat.isOpen) return;
       if (!this.#locked && !this.#gameOver && !this.#touch.active) {

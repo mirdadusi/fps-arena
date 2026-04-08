@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
 import { ARENA_LAYOUTS } from './ArenaLayouts.js';
+import { PersistenceStore } from '../stores/PersistenceStore.js';
 
 /**
  * Arena — builds the 3D world: floor, walls, pillars, crates, lighting.
@@ -61,6 +62,16 @@ export class Arena {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = Config.rendering.toneMappingExposure;
     document.body.appendChild(this.renderer.domElement);
+
+    const lostOverlay = document.getElementById('context-lost-overlay');
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      if (lostOverlay) lostOverlay.style.display = 'flex';
+    });
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      if (lostOverlay) lostOverlay.style.display = 'none';
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    });
   }
 
   #initScene() {
@@ -70,7 +81,8 @@ export class Arena {
   }
 
   #initCamera() {
-    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+    const fov = PersistenceStore.getFOV();
+    this.camera = new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, 0.1, 200);
     this.camera.position.set(0, Config.player.height, 0);
     this.scene.add(this.camera);
   }

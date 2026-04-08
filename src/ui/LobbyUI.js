@@ -1,5 +1,6 @@
 import { ARENA_LAYOUTS } from '../world/ArenaLayouts.js';
 import { Config } from '../Config.js';
+import { PersistenceStore } from '../stores/PersistenceStore.js';
 
 /**
  * LobbyUI — full-screen lobby for single-player config, room creation, and room joining.
@@ -20,6 +21,8 @@ export class LobbyUI {
     this.#populateSkinSelectors();
     this.#bindControls();
     this.#bindGameModeToggle();
+    this.#autofill();
+    this.#buildSettingsPanel();
   }
 
   show() { this.#el.style.display = 'flex'; }
@@ -101,6 +104,8 @@ export class LobbyUI {
       const arena = document.querySelector('#sp-arena .arena-card.selected')?.dataset.arena || 'classic';
       const botCount = parseInt(document.getElementById('sp-bots')?.value || '1');
       const name = document.getElementById('sp-name')?.value?.trim() || 'Player';
+      PersistenceStore.setPlayerName(name);
+      PersistenceStore.setSkinIndex(this.#skinIndices.sp);
       this.#startCallback?.({
         mode: 'single', arena, botCount, playerName: name,
         skinIndex: this.#skinIndices.sp,
@@ -244,4 +249,99 @@ export class LobbyUI {
   }
 
   #esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  // ── Persistence: autofill ─────────────────────────────────
+
+  #autofill() {
+    const name = PersistenceStore.getPlayerName();
+    const skin = PersistenceStore.getSkinIndex();
+    ['sp-name', 'cr-name', 'jr-name'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = name;
+    });
+    // Select saved skin swatch for the single-player tab
+    ['sp', 'cr', 'jr'].forEach(prefix => {
+      this.#skinIndices[prefix] = skin;
+      const container = document.getElementById(`${prefix}-skin`);
+      if (!container) return;
+      const swatches = container.querySelectorAll('.skin-swatch');
+      swatches.forEach((s, i) => s.classList.toggle('selected', i === skin));
+    });
+  }
+
+  // ── Settings panel ────────────────────────────────────────
+
+  #buildSettingsPanel() {
+    const existing = document.getElementById('settings-overlay');
+    if (existing) return; // already built by HTML
+
+    const overlay = document.createElement('div');
+    overlay.id = 'settings-overlay';
+    overlay.style.cssText = `
+      display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85);
+      z-index:200; align-items:center; justify-content:center;
+    `;
+
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+      background:#1a1a22; border:1px solid #444; border-radius:8px;
+      padding:32px; min-width:320px; color:#eee; font-family:inherit;
+    `;
+    panel.innerHTML = `
+      <h2 style="margin:0 0 24px;color:#f80;font-size:22px;">⚙️ Settings</h2>
+      <div class="lobby-field">
+        <label>Mouse Sensitivity: <span id="sens-val">${PersistenceStore.getSensitivity().toFixed(1)}</span></label>
+        <input type="range" id="settings-sens" min="0.1" max="5" step="0.1"
+          value="${PersistenceStore.getSensitivity()}">
+      </div>
+      <div class="lobby-field">
+        <label>FOV: <span id="fov-val">${PersistenceStore.getFOV()}</span></label>
+        <input type="range" id="settings-fov" min="60" max="120" step="1"
+          value="${PersistenceStore.getFOV()}">
+      </div>
+      <div class="lobby-field">
+        <label>Volume: <span id="vol-val">${Math.round(PersistenceStore.getVolume() * 100)}%</span></label>
+        <input type="range" id="settings-vol" min="0" max="1" step="0.01"
+          value="${PersistenceStore.getVolume()}">
+      </div>
+      <button id="settings-close" class="lobby-btn" style="margin-top:16px;width:100%;">Close</button>
+    `;
+
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    const sensInput = panel.querySelector('#settings-sens');
+    const fovInput  = panel.querySelector('#settings-fov');
+    const volInput  = panel.querySelector('#settings-vol');
+
+    sensInput.addEventListener('input', () => {
+      const v = parseFloat(sensInput.value);
+      panel.querySelector('#sens-val').textContent = v.toFixed(1);
+      PersistenceStore.setSensitivity(v);
+    });
+    fovInput.addEventListener('input', () => {
+      const v = parseInt(fovInput.value);
+      panel.querySelector('#fov-val').textContent = v;
+      PersistenceStore.setFOV(v);
+    });
+    volInput.addEventListener('input', () => {
+      const v = parseFloat(volInput.value);
+      panel.querySelector('#vol-val').textContent = `${Math.round(v * 100)}%`;
+      PersistenceStore.setVolume(v);
+      // Also sync to AudioSystem volume key used by AudioSystem constructor
+      localStorage.setItem('fps-arena-volume', String(v));
+    });
+
+    panel.querySelector('#settings-close').addEventListener('click', () => {
+      overlay.style.display = 'none';
+    });
+
+    // Open button
+    const openBtn = document.getElementById('btn-settings');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        overlay.style.display = 'flex';
+      });
+    }
+  }
 }
