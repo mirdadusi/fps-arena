@@ -1,0 +1,216 @@
+import * as THREE from 'three';
+import { Config } from '../Config.js';
+import { ARENA_LAYOUTS } from './ArenaLayouts.js';
+
+/**
+ * Arena — builds the 3D world: floor, walls, pillars, crates, lighting.
+ * Supports multiple arena layouts via ArenaLayouts data.
+ *
+ * Pattern: Builder — constructs the world from data-driven layout definitions.
+ */
+export class Arena {
+  scene;
+  renderer;
+  camera;
+  colliders = [];
+
+  #floorMat;
+  #wallMat;
+  #pillarMat;
+  #crateMat;
+  #layoutMeshes = [];
+  #currentLayout;
+
+  get pickupSpots()   { return this.#currentLayout?.pickupSpots || []; }
+  get playerSpawns()  { return this.#currentLayout?.playerSpawns || []; }
+
+  constructor(layoutName = 'classic') {
+    this.#initRenderer();
+    this.#initScene();
+    this.#initCamera();
+    this.#initMaterials();
+    this.#initLighting();
+    this.#buildFloor();
+    this.#buildOuterWalls();
+    this.buildLayout(layoutName);
+  }
+
+  buildLayout(layoutName) {
+    this.clearLayout();
+    this.#currentLayout = ARENA_LAYOUTS[layoutName] || ARENA_LAYOUTS.classic;
+    this.#buildPillars(this.#currentLayout.pillars);
+    this.#buildCoverBlocks(this.#currentLayout.coverBlocks);
+    this.#buildCrates(this.#currentLayout.crates);
+  }
+
+  clearLayout() {
+    for (const mesh of this.#layoutMeshes) this.scene.remove(mesh);
+    this.#layoutMeshes = [];
+    // Remove layout colliders (keep outer walls — first 4)
+    this.colliders.splice(4);
+  }
+
+  // ── Setup ─────────────────────────────────────────────────
+
+  #initRenderer() {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = Config.rendering.toneMappingExposure;
+    document.body.appendChild(this.renderer.domElement);
+  }
+
+  #initScene() {
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(Config.rendering.fogColor);
+    this.scene.fog = new THREE.FogExp2(Config.rendering.fogColor, Config.rendering.fogDensity);
+  }
+
+  #initCamera() {
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+    this.camera.position.set(0, Config.player.height, 0);
+    this.scene.add(this.camera);
+  }
+
+  #initMaterials() {
+    this.#floorMat = new THREE.MeshStandardMaterial({ color: 0x333340, roughness: 0.7, metalness: 0.2 });
+    this.#wallMat  = new THREE.MeshStandardMaterial({ color: 0x444455, roughness: 0.6, metalness: 0.3 });
+    this.#pillarMat = new THREE.MeshStandardMaterial({ color: 0x556666, roughness: 0.4, metalness: 0.5 });
+    this.#crateMat = new THREE.MeshStandardMaterial({ color: 0x886644, roughness: 0.8, metalness: 0.1 });
+  }
+
+  // ── Lighting ──────────────────────────────────────────────
+
+  #initLighting() {
+    const r = Config.rendering;
+    this.scene.add(new THREE.AmbientLight(r.ambientColor, r.ambientIntensity));
+    this.scene.add(new THREE.HemisphereLight(r.hemiSkyColor, r.hemiGroundColor, r.hemiIntensity));
+
+    const dir = new THREE.DirectionalLight(r.dirLightColor, r.dirLightIntensity);
+    dir.position.set(20, 30, 10);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(2048, 2048);
+    dir.shadow.camera.left = dir.shadow.camera.bottom = -40;
+    dir.shadow.camera.right = dir.shadow.camera.top = 40;
+    this.scene.add(dir);
+
+    this.#addAccentLights();
+  }
+
+  #addAccentLights() {
+    const S = Config.arena.size;
+    const colors = [0xff4444, 0x4488ff, 0x44ff88, 0xffaa00];
+    const corners = [
+      [-S/2 + 3, 5, -S/2 + 3],
+      [ S/2 - 3, 5, -S/2 + 3],
+      [-S/2 + 3, 5,  S/2 - 3],
+      [ S/2 - 3, 5,  S/2 - 3],
+    ];
+    corners.forEach((pos, i) => {
+      const light = new THREE.PointLight(colors[i], 12, 40);
+      light.position.set(...pos);
+      this.scene.add(light);
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.3, 8, 8),
+        new THREE.MeshBasicMaterial({ color: colors[i] }),
+      );
+      sphere.position.set(...pos);
+      this.scene.add(sphere);
+    });
+  }
+
+  // ── Geometry builders ─────────────────────────────────────
+
+  #buildFloor() {
+    const S = Config.arena.size;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(S, S), this.#floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.scene.add(floor);
+
+    const grid = new THREE.GridHelper(S, 30, 0x222233, 0x222233);
+    grid.position.y = 0.01;
+    this.scene.add(grid);
+  }
+
+  #addWall(x, z, w, d, trackLayout = false) {
+    const H = Config.arena.wallHeight;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), this.#wallMat);
+    mesh.position.set(x, H / 2, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.scene.add(mesh);
+    if (trackLayout) this.#layoutMeshes.push(mesh);
+    this.colliders.push({
+      min: new THREE.Vector3(x - w/2, 0, z - d/2),
+      max: new THREE.Vector3(x + w/2, H, z + d/2),
+    });
+  }
+
+  #buildOuterWalls() {
+    const HS = Config.arena.size / 2;
+    this.#addWall(0, -HS, Config.arena.size + 1, 1);
+    this.#addWall(0,  HS, Config.arena.size + 1, 1);
+    this.#addWall(-HS, 0, 1, Config.arena.size + 1);
+    this.#addWall( HS, 0, 1, Config.arena.size + 1);
+  }
+
+  #buildPillars(positions) {
+    const H = Config.arena.wallHeight;
+    (positions || []).forEach(([px, pz]) => {
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.2, 1.2, H, 8), this.#pillarMat,
+      );
+      mesh.position.set(px, H / 2, pz);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.#layoutMeshes.push(mesh);
+      this.colliders.push({
+        min: new THREE.Vector3(px - 1.2, 0, pz - 1.2),
+        max: new THREE.Vector3(px + 1.2, H, pz + 1.2),
+      });
+    });
+  }
+
+  #buildCoverBlocks(blocks) {
+    (blocks || []).forEach(b => this.#addWall(b.x, b.z, b.w, b.d, true));
+  }
+
+  #buildCrates(positions) {
+    (positions || []).forEach(([cx, cz]) => {
+      const s = 1.5 + Math.random();
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), this.#crateMat);
+      mesh.position.set(cx, s / 2, cz);
+      mesh.rotation.y = Math.random() * Math.PI;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.#layoutMeshes.push(mesh);
+      this.colliders.push({
+        min: new THREE.Vector3(cx - s/2, 0, cz - s/2),
+        max: new THREE.Vector3(cx + s/2, s, cz + s/2),
+      });
+    });
+  }
+
+  // ── Public helpers ────────────────────────────────────────
+
+  onResize() {
+    this.camera.aspect = window.innerWidth / window.innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  render() {
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  destroy() {
+    this.renderer.domElement.remove();
+    this.renderer.dispose();
+  }
+}
