@@ -5,6 +5,10 @@ import { Config } from '../Config.js';
  * Returns a difficulty profile based on the player's kill count.
  */
 export class DifficultyManager {
+  // coverChance / retreatEnabled per tier (0–4)
+  static #coverChance     = [0, 0.10, 0.20, 0.35, 0.50];
+  static #retreatEnabled  = [false, false, true, true, true];
+
   /** @param {number} kills */
   getProfile(kills) {
     const d = Config.difficulty;
@@ -20,6 +24,8 @@ export class DifficultyManager {
       enemyHP:  Config.enemy.maxHP + tier * d.hpPerTier,
       dodgeChance: d.dodgeBase + tier * d.dodgePerTier,
       burstCount: 1 + Math.min(tier, 3),
+      coverChance:    DifficultyManager.#coverChance[tier],
+      retreatEnabled: DifficultyManager.#retreatEnabled[tier],
     };
   }
 

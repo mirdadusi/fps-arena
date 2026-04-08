@@ -87,6 +87,8 @@ export const Config = Object.freeze({
     radius: 0.6,
     hitRadius: 0.7,
     hitHalfHeight: 1.3,
+    retreatHPThreshold: 30,
+    coverSeekRadius: 20,
   },
 
   physics: {

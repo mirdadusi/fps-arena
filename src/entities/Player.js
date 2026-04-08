@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { PersistenceStore } from '../stores/PersistenceStore.js';
 
 /**
  * Player — owns first-person camera movement, health, and input state.
@@ -28,8 +29,9 @@ export class Player {
   }
 
   #onMouseMove(e) {
-    this.yaw   -= e.movementX * 0.002;
-    this.pitch  -= e.movementY * 0.002;
+    const sens = PersistenceStore.getSensitivity();
+    this.yaw   -= e.movementX * 0.002 * sens;
+    this.pitch  -= e.movementY * 0.002 * sens;
     this.pitch  = Math.max(-Math.PI/2 + 0.05, Math.min(Math.PI/2 - 0.05, this.pitch));
   }
 

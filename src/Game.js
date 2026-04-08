@@ -15,6 +15,7 @@ import { RemotePlayer } from './entities/RemotePlayer.js';
 import { PhysicsSystem } from './systems/PhysicsSystem.js';
 import { BulletSystem } from './systems/BulletSystem.js';
 import { ParticleSystem } from './systems/ParticleSystem.js';
+import { AudioSystem } from './systems/AudioSystem.js';
 import { PickupSystem } from './pickups/PickupSystem.js';
 import { GrenadeSystem } from './systems/GrenadeSystem.js';
 import { TeamManager } from './systems/TeamManager.js';
@@ -22,6 +23,7 @@ import { TeamManager } from './systems/TeamManager.js';
 // AI
 import { EnemyAI } from './ai/EnemyAI.js';
 import { DifficultyManager } from './ai/DifficultyManager.js';
+import { extractCoverPoints } from './ai/CoverPoints.js';
 
 // UI
 import { HUD } from './ui/HUD.js';
@@ -47,6 +49,7 @@ export class Game {
   #physics;
   #bullets;
   #particles;
+  #audio;
   #pickups;
   #grenades;
   #teams;
@@ -99,6 +102,7 @@ export class Game {
     this.#physics  = new PhysicsSystem(this.#arena.colliders);
     this.#bullets  = new BulletSystem(this.#arena.scene, this.#physics);
     this.#particles = new ParticleSystem(this.#arena.scene);
+    this.#audio    = new AudioSystem();
     this.#pickups  = new PickupSystem(this.#arena.scene);
     this.#grenades = new GrenadeSystem(this.#arena.scene, this.#physics);
     this.#teams    = new TeamManager(this.#arena.scene);
@@ -140,6 +144,8 @@ export class Game {
 
     this.#bindEvents();
     this.#ui.showBlocker();
+    document.body.classList.add('game-active');
+    this.#bus.emit(GameEvents.GAME_STARTED);
     this.#loop();
   }
 
@@ -150,6 +156,7 @@ export class Game {
     for (let i = 0; i < count; i++) {
       const enemy = new Enemy(this.#arena.scene);
       const ai    = new EnemyAI(enemy, this.#physics);
+      ai.setCoverPoints(extractCoverPoints(this.#arena.colliders));
       const sp = spawns[(i + 1) % spawns.length] || { x: 20, z: -20 };
       const diff = this.#difficulty.getProfile(0);
       enemy.spawn(new THREE.Vector3(sp.x, 0, sp.z), diff.enemyHP);
@@ -248,8 +255,12 @@ export class Game {
   #bindEvents() {
     document.addEventListener('pointerlockchange', () => {
       this.#locked = document.pointerLockElement === this.#arena.renderer.domElement;
-      if (this.#locked) this.#ui.hideBlocker();
-      else if (!this.#gameOver) this.#ui.showBlocker();
+      if (this.#locked) {
+        this.#ui.hideBlocker();
+        this.#audio.init();
+      } else if (!this.#gameOver) {
+        this.#ui.showBlocker();
+      }
     });
 
     document.addEventListener('mousedown', e => {
@@ -282,6 +293,35 @@ export class Game {
       }
     });
 
+    // Mute toggle button
+    const muteBtn = document.getElementById('mute-btn');
+    if (muteBtn) {
+      muteBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (this.#audio.volume > 0) {
+          muteBtn.dataset.prevVolume = String(this.#audio.volume);
+          this.#audio.setVolume(0);
+          muteBtn.textContent = '🔇';
+        } else {
+          const prev = parseFloat(muteBtn.dataset.prevVolume) || 0.4;
+          this.#audio.setVolume(prev);
+          muteBtn.textContent = '🔊';
+        }
+      });
+    }
+
+    // AudioSystem EventBus subscriptions
+    this.#bus.on(GameEvents.PLAYER_SHOT,      d => this.#audio.playShot(d?.weaponKey));
+    this.#bus.on(GameEvents.BULLET_HIT_WALL,  () => this.#audio.playImpactWall());
+    this.#bus.on(GameEvents.BULLET_HIT_ENEMY, () => this.#audio.playImpactEnemy());
+    this.#bus.on(GameEvents.PLAYER_RELOADED,  () => this.#audio.playReload());
+    this.#bus.on(GameEvents.GRENADE_EXPLODE,  () => this.#audio.playExplosion());
+    this.#bus.on(GameEvents.PLAYER_DAMAGED,   () => this.#audio.playDamage());
+    this.#bus.on(GameEvents.PICKUP_COLLECTED, d => this.#audio.playPickup(d?.type));
+    this.#bus.on(GameEvents.ENEMY_DIED,       () => this.#audio.playEnemyDeath());
+    this.#bus.on(GameEvents.GAME_STARTED,     () => this.#audio.startAmbient());
+    this.#bus.on(GameEvents.GAME_OVER,        () => this.#audio.stopAmbient());
+
     this.#ui.onGameOverClick(() => this.#resetGame());
     window.addEventListener('resize', () => this.#arena.onResize());
   }
@@ -291,6 +331,8 @@ export class Game {
   #playerShoot() {
     if (this.#gameOver) return;
     if (!this.#weapon.tryFire()) return;
+
+    this.#bus.emit(GameEvents.PLAYER_SHOT, { weaponKey: this.#weapon.currentKey });
 
     const cam = this.#arena.camera;
     const def = this.#weapon.currentDef;
@@ -340,11 +382,13 @@ export class Game {
     this.#hitStreak = 0;
     this.#particles.spawn(bullet.mesh.position, 0xff0000, Config.particles.playerHitCount);
     this.#hud.flashDamage();
+    this.#bus.emit(GameEvents.PLAYER_DAMAGED);
 
     if (dead) {
       this.#gameOver = true;
       this.#deaths++;
       document.exitPointerLock();
+      this.#bus.emit(GameEvents.GAME_OVER);
       const mins = Math.floor(this.#gameTime / 60);
       const secs = Math.floor(this.#gameTime % 60).toString().padStart(2, '0');
       this.#ui.showGameOver({
@@ -373,12 +417,14 @@ export class Game {
       if (this.#hitStreak > this.#maxStreak) this.#maxStreak = this.#hitStreak;
       this.#particles.spawn(bullet.mesh.position, 0xff4444, Config.particles.enemyHitCount);
       this.#hud.flashHitMarker();
+      this.#bus.emit(GameEvents.BULLET_HIT_ENEMY);
 
       // Rocket splash damage
       if (wpnDef.explosive) this.#doSplashDamage(bullet.mesh.position, wpnDef);
 
       if (dead) {
         bot.enemy.kill();
+        this.#bus.emit(GameEvents.ENEMY_DIED);
         const diff = this.#difficulty.getProfile(this.#kills);
         const killScore = Config.scoring.baseKillScore + diff.tier * Config.scoring.tierBonus + this.#hitStreak * Config.scoring.streakBonus;
         this.#score += killScore;
@@ -472,6 +518,7 @@ export class Game {
       new THREE.Vector3(pickup.spot.x, 1, pickup.spot.z),
       pickup.def.color, 10,
     );
+    this.#bus.emit(GameEvents.PICKUP_COLLECTED, { type: pickup.type });
     if (this.#network) this.#network.sendPickupCollected(pickup.id);
   }
 
@@ -493,6 +540,7 @@ export class Game {
     this.#gameOver = false;
     this.#ui.hideGameOver();
     this.#hud.clearKillFeed();
+    this.#audio.startAmbient();
 
     for (const bot of this.#bots) this.#respawnBot(bot);
 
@@ -532,6 +580,8 @@ export class Game {
 
   destroy() {
     cancelAnimationFrame(this.#animFrame);
+    this.#audio.stopAmbient();
+    document.body.classList.remove('game-active');
     for (const unsub of this.#netUnsubs) unsub();
     for (const [, rp] of this.#remotePlayers) rp.destroy();
     this.#remotePlayers.clear();
@@ -568,7 +618,8 @@ export class Game {
       this.#player.clampToBounds();
 
       // Weapon
-      this.#weapon.update(dt, now, this.#player.isMoving);
+      const reloadDone = this.#weapon.update(dt, now, this.#player.isMoving);
+      if (reloadDone) this.#bus.emit(GameEvents.PLAYER_RELOADED);
       if (this.#player.wantsReload() || this.#touch.wantsReload) this.#weapon.startReload();
 
       // Touch weapon switch
@@ -600,6 +651,7 @@ export class Game {
 
       // Grenades
       const grenadeResults = this.#grenades.update(dt, this.#arena.camera.position, this.#bots, this.#remotePlayers);
+      if (grenadeResults.explosionCount > 0) this.#bus.emit(GameEvents.GRENADE_EXPLODE);
       if (grenadeResults.playerDamage > 0) {
         this.#player.takeDamage(grenadeResults.playerDamage);
         this.#hud.flashDamage();
@@ -608,6 +660,7 @@ export class Game {
         const dead = hit.bot.enemy.takeDamage(hit.damage);
         if (dead) {
           hit.bot.enemy.kill();
+          this.#bus.emit(GameEvents.ENEMY_DIED);
           this.#kills++;
           this.#score += 100;
           this.#hud.addKillFeed('Enemy eliminated by grenade +100');
@@ -658,7 +711,10 @@ export class Game {
 
     // Bullets
     this.#bullets.update(dt, {
-      onWallHit:   pos    => this.#particles.spawn(pos, 0xffaa44, Config.particles.wallHitCount),
+      onWallHit: pos => {
+        this.#particles.spawn(pos, 0xffaa44, Config.particles.wallHitCount);
+        this.#bus.emit(GameEvents.BULLET_HIT_WALL);
+      },
       onPlayerHit: bullet => this.#onPlayerHit(bullet, dt),
       onEnemyHit:  bullet => this.#onEnemyHit(bullet),
     });

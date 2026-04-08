@@ -50,7 +50,7 @@ export class GrenadeSystem {
   }
 
   update(dt, playerPos, enemies, remotePlayers) {
-    const results = { playerDamage: 0, enemyHits: [], remoteHits: [] };
+    const results = { playerDamage: 0, enemyHits: [], remoteHits: [], explosionCount: 0 };
 
     // Update grenades
     for (let i = this.#grenades.length - 1; i >= 0; i--) {
@@ -126,6 +126,8 @@ export class GrenadeSystem {
     this.#scene.add(light);
 
     this.#explosions.push({ mesh: explosionMesh, light, life: 0.5, maxLife: 0.5 });
+
+    results.explosionCount++;
 
     const radius = Config.grenade.radius;
     const maxDmg = Config.grenade.damage;

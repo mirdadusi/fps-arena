@@ -23,9 +23,9 @@
 - [ ] Add `retreat` state to `EnemyAI`: move away from player; switch to `cover` on arrival; after 3 s in cover switch back to `chase`; guard behind `diff.retreatEnabled`
 
 ### Spec 03 — Audio System
-- [ ] Add missing `GameEvents` constants (`PLAYER_SHOT`, `BULLET_HIT_WALL`, `BULLET_HIT_ENEMY`, `PLAYER_RELOADED`, `GRENADE_EXPLODE`, `PLAYER_DAMAGED`, `PICKUP_COLLECTED`, `ENEMY_DIED`, `GAME_STARTED`, `GAME_OVER`) to `EventBus.js` if absent
-- [ ] Create `src/systems/AudioSystem.js` with `AudioContext`-based synthesis: `playShot(weaponKey)`, `playImpactWall()`, `playImpactEnemy()`, `playReload()`, `playExplosion()`, `playDamage()`, `playPickup(type)`, `playEnemyDeath()`, `startAmbient()`, `stopAmbient()`, `setVolume(v)` / `get volume()`; volume persists to `localStorage` key `fps-arena-volume`
-- [ ] Instantiate `AudioSystem` in `Game.js`; call `init()` on first pointer-lock; subscribe to `EventBus` events and call the corresponding `AudioSystem` methods
+- [x] Add missing `GameEvents` constants (`PLAYER_SHOT`, `BULLET_HIT_WALL`, `BULLET_HIT_ENEMY`, `PLAYER_RELOADED`, `GRENADE_EXPLODE`, `PLAYER_DAMAGED`, `PICKUP_COLLECTED`, `ENEMY_DIED`, `GAME_STARTED`, `GAME_OVER`) to `EventBus.js` if absent
+- [x] Create `src/systems/AudioSystem.js` with `AudioContext`-based synthesis: `playShot(weaponKey)`, `playImpactWall()`, `playImpactEnemy()`, `playReload()`, `playExplosion()`, `playDamage()`, `playPickup(type)`, `playEnemyDeath()`, `startAmbient()`, `stopAmbient()`, `setVolume(v)` / `get volume()`; volume persists to `localStorage` key `fps-arena-volume`
+- [x] Instantiate `AudioSystem` in `Game.js`; call `init()` on first pointer-lock; subscribe to `EventBus` events and call the corresponding `AudioSystem` methods
 
 ### Spec 04 — Persistence
 - [ ] Create `src/stores/PersistenceStore.js` with `getScores/saveScore/clearScores`, `getPlayerName/setPlayerName`, `getSkinIndex/setSkinIndex`, `getSensitivity/setSensitivity`, `getFOV/setFOV`, `getVolume/setVolume` — all using `fps-arena.` prefix; enforce 10-entry cap on scores

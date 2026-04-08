@@ -33,18 +33,28 @@ export const GameEvents = Object.freeze({
   PLAYER_DAMAGED:   'player:damaged',
   PLAYER_DIED:      'player:died',
   PLAYER_SHOT:      'player:shot',
+  PLAYER_RELOADED:  'player:reloaded',
 
   ENEMY_DAMAGED:    'enemy:damaged',
   ENEMY_KILLED:     'enemy:killed',
+  ENEMY_DIED:       'enemy:died',
   ENEMY_SPAWNED:    'enemy:spawned',
   ENEMY_FIRED:      'enemy:fired',
+
+  BULLET_HIT_WALL:  'bullet:hitWall',
+  BULLET_HIT_ENEMY: 'bullet:hitEnemy',
 
   WEAPON_FIRED:     'weapon:fired',
   WEAPON_RELOAD:    'weapon:reload',
   WEAPON_RELOADED:  'weapon:reloaded',
 
+  GRENADE_EXPLODE:  'grenade:explode',
+
+  PICKUP_COLLECTED: 'pickup:collected',
+
   KILL_FEED:        'ui:killFeed',
   GAME_RESET:       'game:reset',
+  GAME_STARTED:     'game:started',
   GAME_OVER:        'game:over',
   POINTER_LOCKED:   'input:locked',
   POINTER_UNLOCKED: 'input:unlocked',

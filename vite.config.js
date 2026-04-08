@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   // Serve static assets (sounds, textures, etc.) from the project root
   publicDir: 'public',
+  base: './',
   build: {
     outDir: 'dist',
     target: 'es2020',
