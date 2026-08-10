@@ -133,8 +133,11 @@ export class LobbyUI {
     const { NetworkManager } = await import('../net/NetworkManager.js');
     this.#network = new NetworkManager();
     try {
+      // Same origin, no explicit port: behind TLS the old `:3000` had no
+      // certificate and the connection simply failed. A reverse proxy maps
+      // /ws to the game server; in dev, `npm start` serves both from one port.
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      await this.#network.connect(`${proto}//${location.hostname}:3000`);
+      await this.#network.connect(`${proto}//${location.host}/ws`);
       this.#bindNetworkEvents();
       return true;
     } catch {

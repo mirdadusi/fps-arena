@@ -11,6 +11,9 @@ import { Weapon } from './entities/Weapon.js';
 import { Enemy } from './entities/Enemy.js';
 import { RemotePlayer } from './entities/RemotePlayer.js';
 
+/** Seconds between outgoing player-state updates (20 Hz). */
+const NET_SEND_INTERVAL = 1 / 20;
+
 // Systems
 import { PhysicsSystem } from './systems/PhysicsSystem.js';
 import { BulletSystem } from './systems/BulletSystem.js';
@@ -60,6 +63,7 @@ export class Game {
 
   // Multiplayer
   #network      = null;
+  #netAccum     = 0;
   #playerId     = null;
   #remotePlayers = new Map();
   #netUnsubs    = [];
@@ -706,9 +710,18 @@ export class Game {
       // Remote players
       for (const [, rp] of this.#remotePlayers) rp.update(dt);
 
-      // Network sync
+      // Network sync, throttled. Sending every frame put ~3400 messages/s and
+      // ~4 Mbit/s through a full 8-player room for no visible benefit —
+      // remote players already interpolate between updates.
       if (this.#network) {
-        this.#network.sendPlayerState(this.#player.position, { y: this.#player.yaw, x: this.#player.pitch });
+        this.#netAccum += dt;
+        if (this.#netAccum >= NET_SEND_INTERVAL) {
+          // Subtract rather than zero the accumulator: zeroing discards the
+          // remainder and under-sends on machines whose frame time does not
+          // divide the interval (15/s instead of 20/s at 30fps).
+          this.#netAccum -= NET_SEND_INTERVAL;
+          this.#network.sendPlayerState(this.#player.position, { y: this.#player.yaw, x: this.#player.pitch });
+        }
       }
 
       this.#gameTime += dt;
