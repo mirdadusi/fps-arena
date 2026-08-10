@@ -89,6 +89,23 @@ const MIN_MS_BETWEEN_HITS = 40;
 
 function genId(prefix) { return `${prefix}_${++playerCounter}_${Date.now().toString(36)}`; }
 
+/**
+ * Teams and skins come from the client and are echoed to every other player,
+ * so they are constrained to known values here rather than trusted. An
+ * unvalidated team string reached innerHTML in the lobby list.
+ */
+const TEAMS = new Set(['red', 'blue']);
+const SKIN_COUNT = 8;
+
+function cleanTeam(value, fallback = 'red') {
+  return TEAMS.has(value) ? value : fallback;
+}
+
+function cleanSkin(value) {
+  const n = Number.parseInt(value, 10);
+  return Number.isInteger(n) && n >= 0 && n < SKIN_COUNT ? n : 0;
+}
+
 wss.on('connection', (ws) => {
   if (wss.clients.size > MAX_CONNECTIONS) {
     ws.close(1013, 'Server full');
@@ -143,8 +160,8 @@ wss.on('connection', (ws) => {
           Math.min(Math.max(parseInt(msg.botCount) || 0, 0), 5),
           playerId,
           String(msg.gameMode || 'ffa'));
-        const team = msg.gameMode === 'ffa' ? null : (msg.team || 'red');
-        room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, msg.skinIndex || 0);
+        const team = msg.gameMode === 'ffa' ? null : cleanTeam(msg.team);
+        room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, cleanSkin(msg.skinIndex));
         rooms.set(roomId, room);
         currentRoomId = roomId;
         ws.send(JSON.stringify({
@@ -167,8 +184,8 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'ERROR', message: 'Room not available' }));
           break;
         }
-        const team = room.gameMode === 'ffa' ? null : (msg.team || room.getAutoTeam());
-        const { color, isHost } = room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, msg.skinIndex || 0);
+        const team = room.gameMode === 'ffa' ? null : cleanTeam(msg.team, room.getAutoTeam());
+        const { color, isHost } = room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, cleanSkin(msg.skinIndex));
         currentRoomId = msg.roomId;
         ws.send(JSON.stringify({
           type: 'JOINED', roomId: room.id, roomName: room.name,

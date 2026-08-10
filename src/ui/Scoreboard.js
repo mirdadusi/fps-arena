@@ -20,7 +20,7 @@ export class Scoreboard {
     for (const p of sorted) {
       const tr = document.createElement('tr');
       if (p.isLocal) tr.classList.add('local-player');
-      tr.innerHTML = `<td style="color:${p.color||'#fff'}">${this.#esc(p.name)}</td><td>${p.kills||0}</td><td>${p.deaths||0}</td><td>${p.score||0}</td>`;
+      tr.innerHTML = `<td style="color:${this.#esc(String(p.color || '#fff'))}">${this.#esc(p.name)}</td><td>${Number(p.kills) || 0}</td><td>${Number(p.deaths) || 0}</td><td>${Number(p.score) || 0}</td>`;
       this.#body.appendChild(tr);
     }
   }

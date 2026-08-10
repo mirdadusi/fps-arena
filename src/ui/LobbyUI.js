@@ -244,8 +244,11 @@ export class LobbyUI {
     players?.forEach(p => {
       const el = document.createElement('div');
       el.className = 'waiting-player';
-      const teamLabel = p.team ? ` [${p.team.toUpperCase()}]` : '';
-      el.innerHTML = `<span class="player-dot" style="background:${p.color}"></span> ${this.#esc(p.name)}${teamLabel}${p.isHost ? ' (Host)' : ''}`;
+      // Escaped even though the server now constrains team to red/blue:
+      // this string reaches innerHTML, so it should not depend on a second
+      // component getting its validation right.
+      const teamLabel = p.team ? ` [${this.#esc(String(p.team).toUpperCase())}]` : '';
+      el.innerHTML = `<span class="player-dot" style="background:${this.#esc(String(p.color || '#fff'))}"></span> ${this.#esc(p.name)}${teamLabel}${p.isHost ? ' (Host)' : ''}`;
       c.appendChild(el);
     });
     document.getElementById('waiting-info').textContent = `${players?.length || 0} player(s) in room`;
