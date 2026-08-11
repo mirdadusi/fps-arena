@@ -3,6 +3,7 @@ import { Config } from '../Config.js';
 import { villageGroundHeight } from './VillageTerrain.js';
 import { disposeObject3D } from '../rendering/disposeObject3D.js';
 import { createProceduralTexture } from '../rendering/ProceduralTextures.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /**
  * Procedural, asset-free village environment. Geometry creation lives outside
@@ -27,6 +28,7 @@ export class VillageWorld {
       log: new THREE.CylinderGeometry(0.42, 0.5, 1, 8),
       bale: new THREE.CylinderGeometry(0.8, 0.8, 1, 12),
       roof: new THREE.ConeGeometry(1, 1, 4),
+      orb: new THREE.SphereGeometry(0.18, 8, 6),
     };
     this.materials = this.#createMaterials();
     this.group.name = 'village-world';
@@ -39,6 +41,7 @@ export class VillageWorld {
     this.#buildCave();
     this.#buildNaturalCover();
     this.#buildBoundary();
+    this.#batchStaticMeshes();
   }
 
   #createMaterials() {
@@ -56,6 +59,7 @@ export class VillageWorld {
       leafLight: new THREE.MeshStandardMaterial({ map: texture(0x3d6932, 'grass', 37, [3, 3]), roughness: 1 }),
       glass: new THREE.MeshStandardMaterial({ color: 0x8fc6c8, roughness: 0.15, metalness: 0.1 }),
       hay: new THREE.MeshStandardMaterial({ map: texture(0xb9923f, 'hay', 41, [3, 4]), roughness: 1 }),
+      caveGlow: new THREE.MeshBasicMaterial({ color: 0xffa34d, toneMapped: false }),
     };
   }
 
@@ -248,9 +252,9 @@ export class VillageWorld {
     this.#box(25.0, 0, 28.0, 7.0, 2.6, 1.5, this.materials.stoneDark);
     this.#box(24.5, 1.35, 24.2, 4.8, 1.05, 3.0, this.materials.stoneDark);
 
-    const glow = new THREE.PointLight(0xffa34d, 5, 13);
+    const glow = this.#add(new THREE.Mesh(this.geometries.orb, this.materials.caveGlow), false, false);
     glow.position.set(18.5, 1.3, 23.5);
-    this.group.add(glow);
+    glow.scale.setScalar(2.4);
   }
 
   #buildNaturalCover() {
@@ -284,6 +288,58 @@ export class VillageWorld {
       this.#box(-half, 0, p, 0.16, 1.6, 0.16, this.materials.wood, false);
       this.#box(half, 0, p, 0.16, 1.6, 0.16, this.materials.wood, false);
     }
+  }
+
+  /**
+   * Village scenery never moves. Merge meshes with the same material/shadow
+   * policy so WebGL renders roughly a dozen batches instead of 232 individual
+   * draw calls — the largest performance win on tile-based iPad GPUs.
+   */
+  #batchStaticMeshes() {
+    const sourceMeshes = this.group.children.filter(child => child.isMesh);
+    const sourceGeometries = new Set(sourceMeshes.map(mesh => mesh.geometry));
+    const buckets = new Map();
+
+    for (const mesh of sourceMeshes) {
+      const key = `${mesh.material.uuid}:${Number(mesh.castShadow)}:${Number(mesh.receiveShadow)}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { material: mesh.material, castShadow: mesh.castShadow, receiveShadow: mesh.receiveShadow, meshes: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.meshes.push(mesh);
+    }
+
+    let batchIndex = 0;
+    for (const bucket of buckets.values()) {
+      const transformed = bucket.meshes.map(mesh => {
+        mesh.updateMatrix();
+        const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        geometry.applyMatrix4(mesh.matrix);
+        return geometry;
+      });
+      const merged = mergeGeometries(transformed, false);
+      for (const geometry of transformed) geometry.dispose();
+      if (!merged) continue;
+
+      for (const mesh of bucket.meshes) this.group.remove(mesh);
+      merged.computeBoundingBox();
+      merged.computeBoundingSphere();
+      const batch = new THREE.Mesh(merged, bucket.material);
+      batch.name = `village-static-batch-${batchIndex++}`;
+      batch.castShadow = bucket.castShadow;
+      batch.receiveShadow = bucket.receiveShadow;
+      batch.matrixAutoUpdate = false;
+      this.group.add(batch);
+    }
+
+    const stillUsed = new Set(
+      this.group.children.filter(child => child.isMesh).map(mesh => mesh.geometry),
+    );
+    for (const geometry of sourceGeometries) {
+      if (!stillUsed.has(geometry)) geometry.dispose();
+    }
+    this.geometries = {};
   }
 
   destroy() {

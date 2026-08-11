@@ -391,6 +391,7 @@
   /* ── Touch Controls ──────────────────────────────────── */
   #touch-controls { display: none; }
   body.is-touch #blocker { display: none !important; }
+  body.is-touch { overflow: hidden; overscroll-behavior: none; touch-action: none; }
 
   #touch-move-zone {
     position: fixed; bottom: 20px; left: 20px;
@@ -403,7 +404,7 @@
     position: absolute; top: 50%; left: 50%;
     width: 50px; height: 50px; margin: -25px;
     border-radius: 50%; background: rgba(255,255,255,0.3);
-    transition: transform 0.05s;
+    will-change: transform;
   }
   #touch-look-zone {
     position: fixed; top: 0; right: 0;
@@ -421,9 +422,14 @@
     user-select: none; -webkit-user-select: none;
   }
   .touch-btn:active { background: rgba(255,136,0,0.4); border-color: #f80; }
+  #touch-btn-fire {
+    width: 72px; height: 72px; bottom: 94px; right: 16px;
+    background: rgba(180,35,20,0.42); border-color: rgba(255,110,75,0.65);
+    font-size: 12px; z-index: 62;
+  }
   #touch-btn-reload  { bottom: 180px; right: 20px; }
   #touch-btn-grenade { bottom: 250px; right: 20px; }
-  #touch-btn-jump    { bottom: 110px; right: 20px; }
+  #touch-btn-jump    { bottom: 105px; right: 104px; }
   #touch-btn-crouch  { bottom: 320px; right: 20px; }
 
   .touch-weapon-bar {
@@ -778,6 +784,7 @@
     <div id="touch-stick-inner"></div>
   </div>
   <div id="touch-look-zone"></div>
+  <div class="touch-btn" id="touch-btn-fire">FIRE</div>
   <div class="touch-btn" id="touch-btn-reload">R</div>
   <div class="touch-btn" id="touch-btn-grenade">G</div>
   <div class="touch-btn" id="touch-btn-jump">JUMP</div>
