@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
 
 const PLAYER_COLORS = [0x4488ff, 0xff8844, 0x44ff88, 0xff44ff, 0xffff44, 0x44ffff, 0xff4444, 0x88ff44];
 export { PLAYER_COLORS };
@@ -157,5 +158,9 @@ export class RemotePlayer {
     this.group.position.copy(this.#targetPos);
   }
 
-  destroy() { this.scene.remove(this.group); }
+  destroy() {
+    this.scene.remove(this.group);
+    disposeObject3D(this.group);
+    this.group.clear();
+  }
 }

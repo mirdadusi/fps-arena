@@ -30,6 +30,8 @@
 <meta name="color-scheme" content="dark">
 <meta name="generator" content="Three.js v0.163.0">
 <meta name="copyright" content="© 2026 inspaired.tech">
+<!-- External so strict production Content-Security-Policy still permits it. -->
+<script vite-ignore src="./startup-watchdog.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { overflow: hidden; background: #000; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -200,6 +202,14 @@
     display: inline-block; border: 1px solid #555; border-radius: 4px;
     padding: 4px 10px; margin: 3px; font-size: 13px; color: #ccc;
   }
+  .pause-actions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:20px; }
+  .pause-action {
+    border:1px solid #666; border-radius:5px; background:rgba(20,20,28,0.9);
+    color:#ddd; padding:9px 15px; cursor:pointer; text-decoration:none;
+    font:600 12px 'Segoe UI', Arial, sans-serif; letter-spacing:1px;
+  }
+  .pause-action.primary { border-color:#f80; color:#f80; }
+  .pause-action:hover { border-color:#fc0; color:#fff; }
 
   /* ── HUD ─────────────────────────────────────────────── */
   #hud { position: fixed; bottom: 0; left: 0; right: 0; pointer-events: none; z-index: 10; }
@@ -236,6 +246,7 @@
   #hitmarker { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 11; opacity: 0; transition: opacity 0.08s; }
   #hitmarker.show { opacity: 1; }
   #hitmarker svg { width: 28px; height: 28px; }
+  body.weapon-aiming #crosshair { opacity: 0.18; transform: translate(-50%, -50%) scale(0.7); }
 
   #kill-feed { position: fixed; top: 90px; right: 16px; pointer-events: none; z-index: 10; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   .kill-feed-entry { background: rgba(0,0,0,0.6); padding: 4px 12px; border-left: 3px solid #f44; border-radius: 2px; font-size: 12px; color: #eee; white-space: nowrap; animation: feedFade 3s forwards; }
@@ -412,6 +423,8 @@
   .touch-btn:active { background: rgba(255,136,0,0.4); border-color: #f80; }
   #touch-btn-reload  { bottom: 180px; right: 20px; }
   #touch-btn-grenade { bottom: 250px; right: 20px; }
+  #touch-btn-jump    { bottom: 110px; right: 20px; }
+  #touch-btn-crouch  { bottom: 320px; right: 20px; }
 
   .touch-weapon-bar {
     position: fixed; bottom: 20px; right: 80px;
@@ -556,7 +569,7 @@
           <li><strong>4 Weapons</strong> — Assault Rifle, Shotgun, Sniper Rifle, Rocket Launcher</li>
           <li><strong>Grenades</strong> — Cook and throw with area-of-effect damage</li>
           <li><strong>3 Game Modes</strong> — Free For All, Team Deathmatch, Capture The Flag</li>
-          <li><strong>4 Arenas</strong> — Classic, Corridors, Pillars, Maze</li>
+          <li><strong>5 Arenas</strong> — including Village Survival with woods, houses, hills and caves</li>
           <li><strong>Multiplayer</strong> — WebSocket-based real-time rooms with up to 8 players</li>
           <li><strong>AI Bots</strong> — Adaptive difficulty that scales with your skill</li>
           <li><strong>Pickups</strong> — Health, Ammo, Shield, Speed Boost, Damage Boost</li>
@@ -572,16 +585,18 @@
           <li><strong>Left Click</strong> — Shoot</li>
           <li><strong>R</strong> — Reload</li>
           <li><strong>Shift</strong> — Sprint</li>
+          <li><strong>Space</strong> — Jump</li>
+          <li><strong>Ctrl / C</strong> — Crouch</li>
           <li><strong>1-4</strong> — Switch Weapon</li>
           <li><strong>Scroll Wheel</strong> — Cycle Weapons</li>
           <li><strong>G</strong> — Throw Grenade</li>
           <li><strong>Enter</strong> — Open Chat</li>
           <li><strong>Tab</strong> — Scoreboard</li>
-          <li><strong>Escape</strong> — Pause / Close Chat</li>
+          <li><strong>Escape</strong> — Pause / Exit Menu</li>
         </ul>
 
         <h3>Technology</h3>
-        <p>Built with <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a> (v0.163.0) for 3D rendering, vanilla ES Modules (no build tools), and a Node.js WebSocket server for multiplayer. The entire game is client-side JavaScript — the server only handles room coordination and message relay.</p>
+        <p>Built with <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a> (v0.163.0) for 3D rendering, Vite-bundled vanilla ES Modules, and a Node.js WebSocket server for multiplayer. The game simulation is client-side; the server handles room coordination, reconnect sessions, validation, and message relay.</p>
 
         <h3>Legal</h3>
         <p>Three.js is used under the <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noopener">MIT License</a>. All game code, assets, and design are original work. No third-party textures, models, or sounds are used.</p>
@@ -603,6 +618,8 @@
       <span>Click</span> Shoot &nbsp;
       <span>R</span> Reload &nbsp;
       <span>Shift</span> Sprint &nbsp;
+      <span>Space</span> Jump &nbsp;
+      <span>Ctrl</span> Crouch &nbsp;
       <span>1-4</span> Weapons &nbsp;
       <span>G</span> Grenade &nbsp;
       <span>Enter</span> Chat &nbsp;
@@ -638,11 +655,18 @@
       <span>Click</span> Shoot &nbsp;
       <span>R</span> Reload &nbsp;
       <span>Shift</span> Sprint &nbsp;
+      <span>Space</span> Jump &nbsp;
+      <span>Ctrl</span> Crouch &nbsp;
       <span>1-4</span> Weapons &nbsp;
       <span>G</span> Grenade &nbsp;
       <span>Enter</span> Chat
     </div>
-    <p style="margin-top:16px; color:#f80;">Click to play</p>
+    <div class="pause-actions">
+      <button id="resume-game-btn" class="pause-action primary" type="button" data-game-action>RESUME</button>
+      <button id="return-lobby-btn" class="pause-action" type="button" data-game-action>GAME LOBBY</button>
+      <a class="pause-action" href="https://inspaired.tech/" data-game-action>WEBSITE HOME</a>
+    </div>
+    <p style="margin-top:16px; color:#888;font-size:12px;">Escape opens this menu</p>
   </div>
 </div>
 
@@ -756,6 +780,8 @@
   <div id="touch-look-zone"></div>
   <div class="touch-btn" id="touch-btn-reload">R</div>
   <div class="touch-btn" id="touch-btn-grenade">G</div>
+  <div class="touch-btn" id="touch-btn-jump">JUMP</div>
+  <div class="touch-btn" id="touch-btn-crouch">DUCK</div>
   <div class="touch-weapon-bar">
     <div class="touch-weapon-btn" id="touch-btn-w0">1</div>
     <div class="touch-weapon-btn" id="touch-btn-w1">2</div>
@@ -764,28 +790,15 @@
   </div>
 </div>
 
-<script>
-window.addEventListener('error', e => {
-  const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:red;color:#fff;padding:12px;z-index:9999;font-size:13px;font-family:monospace;white-space:pre-wrap;max-height:40vh;overflow:auto;';
-  d.textContent = `ERROR: ${e.message}\n${e.filename}:${e.lineno}:${e.colno}`;
-  document.body.appendChild(d);
-});
-window.addEventListener('unhandledrejection', e => {
-  const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:red;color:#fff;padding:12px;z-index:9999;font-size:13px;font-family:monospace;white-space:pre-wrap;max-height:40vh;overflow:auto;';
-  d.textContent = `UNHANDLED PROMISE: ${e.reason}`;
-  document.body.appendChild(d);
-});
-</script>
-
 <!-- Loading overlay (visible until game is ready) -->
 <div id="loading-overlay" style="position:fixed;inset:0;background:#0d0d13;display:flex;align-items:center;justify-content:center;z-index:500;flex-direction:column;">
   <style>
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
     #loading-overlay p { animation: pulse 1.4s ease-in-out infinite; color:#f80; font-size:22px; font-family:sans-serif; }
   </style>
-  <p>Loading Arena FPS…</p>
+  <p id="loading-message">Loading Arena FPS…</p>
+  <p id="loading-detail" style="display:none;max-width:520px;margin:18px 24px 0;color:#aaa;font-size:14px;text-align:center;line-height:1.5;"></p>
+  <button id="loading-retry" type="button" style="display:none;margin-top:18px;padding:10px 22px;border:1px solid #f80;border-radius:5px;background:#21170d;color:#f80;font-weight:700;cursor:pointer;">RELOAD</button>
 </div>
 
 <!-- WebGL context-lost overlay (hidden by default) -->
@@ -798,9 +811,9 @@ window.addEventListener('unhandledrejection', e => {
 
 <!-- Pointer-lock error message (hidden by default) -->
 <p id="pointer-lock-error" style="display:none;position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fc0;padding:10px 18px;border-radius:6px;font-family:sans-serif;font-size:14px;z-index:400;text-align:center;">
-  ⚠️ Pointer lock not available. Touch controls or keyboard/mouse without lock will still work.
+  ⚠️ Pointer lock is unavailable. Use touch controls or allow pointer lock in your browser.
 </p>
 
-<script type="module" src="/src/main.js"></script>
+<script type="module" src="/src/bootstrap.js"></script>
 </body>
 </html>

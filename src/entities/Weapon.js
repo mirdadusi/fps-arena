@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
+import { createWeaponModel } from './weapon/WeaponModelFactory.js';
 
 const WEAPON_KEYS = Object.keys(Config.weapons);
 const WEAPON_DEFS = Config.weapons;
@@ -14,6 +16,9 @@ export class Weapon {
   reloadTimer = 0;
   fireCooldown = 0;
   #kick = 0;
+  #recoilVelocity = 0;
+  #aiming = false;
+  #baseFOV;
   #camera;
 
   // Weapon slots
@@ -32,9 +37,10 @@ export class Weapon {
 
   constructor(camera) {
     this.#camera = camera;
+    this.#baseFOV = camera.fov;
     for (const key of WEAPON_KEYS) {
       this.#ammo[key] = WEAPON_DEFS[key].maxAmmo;
-      this.#models[key] = this.#buildModel(key);
+      this.#models[key] = createWeaponModel(key);
       this.#models[key].visible = false;
       this.group.add(this.#models[key]);
     }
@@ -51,6 +57,7 @@ export class Weapon {
   get weaponIndex() { return this.#currentIndex; }
   get weaponName()  { return this.currentDef.name; }
   get isSwitching() { return this.#switching; }
+  get aiming()      { return this.#aiming; }
 
   static get KEYS() { return WEAPON_KEYS; }
 
@@ -58,11 +65,14 @@ export class Weapon {
     if (index === this.#currentIndex || index < 0 || index >= WEAPON_KEYS.length) return;
     if (this.#switching) return;
     this.reloading = false;
+    this.setAiming(false);
     this.#switching = true;
     this.#switchTimer = this.#switchDuration;
     this.#models[this.currentKey].visible = false;
     this.#currentIndex = index;
     this.#models[this.currentKey].visible = true;
+    this.#muzzleFlash.position.z = this.#models[this.currentKey].userData.muzzleZ;
+    this.#muzzleMesh.position.copy(this.#muzzleFlash.position);
     this.fireCooldown = 0;
   }
 
@@ -71,44 +81,6 @@ export class Weapon {
     if (next < 0) next = WEAPON_KEYS.length - 1;
     if (next >= WEAPON_KEYS.length) next = 0;
     this.switchTo(next);
-  }
-
-  #buildModel(key) {
-    const g = new THREE.Group();
-    const dark = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 });
-    const accent = new THREE.MeshStandardMaterial({ color: WEAPON_DEFS[key].bulletColor, metalness: 0.6, roughness: 0.4 });
-    const grip = new THREE.MeshStandardMaterial({ color: 0x333322, roughness: 0.7 });
-
-    const add = (geo, mat, pos, rot) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(...pos);
-      if (rot) m.rotation.set(...rot);
-      g.add(m);
-      return m;
-    };
-
-    if (key === 'rifle') {
-      add(new THREE.BoxGeometry(0.12, 0.14, 0.6), dark, [0, -0.05, -0.2]);
-      add(new THREE.CylinderGeometry(0.025, 0.03, 0.35, 8), dark, [0, 0, -0.55], [Math.PI / 2, 0, 0]);
-      add(new THREE.BoxGeometry(0.08, 0.2, 0.1), grip, [0, -0.17, -0.05], [-0.2, 0, 0]);
-    } else if (key === 'shotgun') {
-      add(new THREE.BoxGeometry(0.14, 0.12, 0.7), dark, [0, -0.05, -0.25]);
-      add(new THREE.CylinderGeometry(0.035, 0.035, 0.4, 8), dark, [0, 0.02, -0.6], [Math.PI / 2, 0, 0]);
-      add(new THREE.CylinderGeometry(0.035, 0.035, 0.4, 8), dark, [0, -0.02, -0.6], [Math.PI / 2, 0, 0]);
-      add(new THREE.BoxGeometry(0.1, 0.22, 0.12), grip, [0, -0.18, 0.05], [-0.25, 0, 0]);
-      add(new THREE.BoxGeometry(0.12, 0.06, 0.25), accent, [0, -0.12, -0.1]);
-    } else if (key === 'sniper') {
-      add(new THREE.BoxGeometry(0.09, 0.1, 0.8), dark, [0, -0.05, -0.3]);
-      add(new THREE.CylinderGeometry(0.02, 0.025, 0.5, 8), dark, [0, 0, -0.7], [Math.PI / 2, 0, 0]);
-      add(new THREE.CylinderGeometry(0.04, 0.04, 0.15, 8), accent, [0, 0.08, -0.25]);
-      add(new THREE.BoxGeometry(0.07, 0.2, 0.1), grip, [0, -0.17, 0.05], [-0.2, 0, 0]);
-    } else if (key === 'rocket') {
-      add(new THREE.CylinderGeometry(0.06, 0.06, 0.7, 8), dark, [0, 0, -0.3], [Math.PI / 2, 0, 0]);
-      add(new THREE.CylinderGeometry(0.07, 0.065, 0.1, 8), accent, [0, 0, -0.65], [Math.PI / 2, 0, 0]);
-      add(new THREE.BoxGeometry(0.1, 0.2, 0.12), grip, [0, -0.14, 0.0], [-0.2, 0, 0]);
-      add(new THREE.BoxGeometry(0.04, 0.08, 0.15), dark, [0, 0.08, -0.15]);
-    }
-    return g;
   }
 
   #buildMuzzleFlash() {
@@ -123,6 +95,8 @@ export class Weapon {
     this.#muzzleMesh.position.copy(this.#muzzleFlash.position);
     this.#muzzleMesh.visible = false;
     this.group.add(this.#muzzleMesh);
+    this.#muzzleFlash.position.z = this.#models[this.currentKey].userData.muzzleZ;
+    this.#muzzleMesh.position.copy(this.#muzzleFlash.position);
   }
 
   tryFire() {
@@ -131,7 +105,7 @@ export class Weapon {
 
     this.ammo--;
     this.fireCooldown = this.currentDef.fireRate;
-    this.#kick = this.currentKey === 'shotgun' ? 2 : this.currentKey === 'rocket' ? 1.5 : 1;
+    this.#recoilVelocity += this.currentDef.recoil;
     this.#muzzleFlash.intensity = 15;
     this.#muzzleMesh.visible = true;
 
@@ -141,8 +115,14 @@ export class Weapon {
 
   startReload() {
     if (this.reloading || this.ammo >= this.currentDef.maxAmmo || this.#switching) return;
+    this.setAiming(false);
     this.reloading = true;
     this.reloadTimer = this.currentDef.reloadTime;
+  }
+
+  setAiming(value) {
+    this.#aiming = !!value && !this.reloading && !this.#switching;
+    document.body.classList.toggle('weapon-aiming', this.#aiming);
   }
 
   reset() {
@@ -153,6 +133,8 @@ export class Weapon {
     this.reloading = false;
     this.fireCooldown = 0;
     this.#kick = 0;
+    this.#recoilVelocity = 0;
+    this.setAiming(false);
     this.#switching = false;
     this.group.rotation.z = 0;
   }
@@ -172,10 +154,11 @@ export class Weapon {
       return false;
     }
 
-    // Recoil decay
-    this.#kick *= 0.85;
-    this.group.rotation.x = -this.#kick * 0.15;
-    this.group.position.z = -0.5 + this.#kick * 0.05;
+    // Frame-rate-independent recoil spring.
+    this.#recoilVelocity -= this.#kick * Config.weaponFeel.recoilSpring * dt;
+    this.#recoilVelocity *= Math.exp(-Config.weaponFeel.recoilDamping * dt);
+    this.#kick = Math.max(0, this.#kick + this.#recoilVelocity * dt);
+    this.group.rotation.x = -this.#kick * 0.12;
 
     // Muzzle flash decay
     this.#muzzleFlash.intensity *= 0.7;
@@ -187,8 +170,21 @@ export class Weapon {
     // Bobbing
     const bobSpeed = isMoving ? 10 : 3;
     const bobAmount = isMoving ? 0.03 : 0.008;
-    this.group.position.y = -0.28 + Math.sin(now * 0.001 * bobSpeed) * bobAmount;
-    this.group.position.x = 0.3 + Math.cos(now * 0.001 * bobSpeed * 0.5) * bobAmount * 0.5;
+    const aiming = this.#aiming && !this.reloading;
+    const response = 1 - Math.exp(-Config.weaponFeel.aimResponse * dt);
+    const bobScale = aiming ? 0.25 : 1;
+    const targetX = (aiming ? 0 : 0.3) + Math.cos(now * 0.001 * bobSpeed * 0.5) * bobAmount * 0.5 * bobScale;
+    const targetY = (aiming ? -0.16 : -0.28) + Math.sin(now * 0.001 * bobSpeed) * bobAmount * bobScale;
+    const targetZ = (aiming ? -0.42 : -0.5) + this.#kick * 0.04;
+    this.group.position.x += (targetX - this.group.position.x) * response;
+    this.group.position.y += (targetY - this.group.position.y) * response;
+    this.group.position.z += (targetZ - this.group.position.z) * response;
+
+    const targetFOV = aiming ? this.#baseFOV * this.currentDef.adsFovMultiplier : this.#baseFOV;
+    if (Math.abs(this.#camera.fov - targetFOV) > 0.01) {
+      this.#camera.fov += (targetFOV - this.#camera.fov) * response;
+      this.#camera.updateProjectionMatrix();
+    }
 
     // Reload
     if (this.reloading) {
@@ -202,5 +198,14 @@ export class Weapon {
       }
     }
     return false;
+  }
+
+  destroy() {
+    this.setAiming(false);
+    this.#camera.fov = this.#baseFOV;
+    this.#camera.updateProjectionMatrix();
+    this.#camera.remove(this.group);
+    disposeObject3D(this.group);
+    this.group.clear();
   }
 }

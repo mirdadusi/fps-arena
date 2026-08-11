@@ -1,18 +1,25 @@
 import { LobbyUI } from './ui/LobbyUI.js';
 import { Game } from './Game.js';
 
-const lobby = new LobbyUI();
-let currentGame = null;
+try {
+  const lobby = new LobbyUI();
+  let currentGame = null;
 
-// Hide loading overlay — LobbyUI constructor allocates all Three.js resources
-document.getElementById('loading-overlay')?.remove();
-
-lobby.onStart(config => {
-  lobby.hide();
-  if (currentGame) { currentGame.destroy(); currentGame = null; }
-  currentGame = new Game(config, () => {
-    currentGame.destroy();
-    currentGame = null;
-    lobby.show();
+  lobby.onStart(config => {
+    lobby.hide();
+    if (currentGame) { currentGame.destroy(); currentGame = null; }
+    currentGame = new Game(config, () => {
+      const game = currentGame;
+      currentGame = null;
+      game?.destroy();
+      lobby.show();
+    });
   });
-});
+
+  // The lobby is now interactive; match resources wait until Start.
+  if (window.__arenaReady) window.__arenaReady();
+  else document.getElementById('loading-overlay')?.remove();
+} catch (error) {
+  window.__arenaFail?.(error);
+  throw error;
+}

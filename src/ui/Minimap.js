@@ -35,6 +35,7 @@ export class Minimap {
     // Walls
     ctx.fillStyle = 'rgba(80, 80, 100, 0.7)';
     for (const box of colliders) {
+      if (box.blocksMovement === false) continue;
       ctx.fillRect(
         (box.min.x + half) * s,
         (box.min.z + half) * s,

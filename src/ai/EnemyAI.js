@@ -1,13 +1,20 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
 
+const EMPTY_SHOTS = Object.freeze([]);
+
+/** Keep an angle inside [-PI, PI]. */
+function shortestAngle(angle) {
+  while (angle > Math.PI) angle -= Math.PI * 2;
+  while (angle < -Math.PI) angle += Math.PI * 2;
+  return angle;
+}
+
 /**
- * EnemyAI — State-machine controlling enemy behavior.
+ * Tactical bot controller with perception, short-term memory and predictive aim.
  *
- * Pattern: State pattern — each state (patrol, chase, strafe, flank, dodge,
- * cover, retreat) determines movement direction. Transitions happen on timer
- * or distance/HP triggers.
- * Shooting uses burst-fire governed by the current DifficultyProfile.
+ * All Vector3 instances are allocated once per bot. update() reuses them, so
+ * five bots at 60 fps no longer produce thousands of temporary objects.
  */
 export class EnemyAI {
   state = 'patrol';
@@ -17,9 +24,45 @@ export class EnemyAI {
   burstRemaining = 0;
   burstCooldown = 0;
 
+  #coverPoints = [];
+  #hasCoverTarget = false;
+  #lastHP = Config.enemy.maxHP;
+  #underFireTimer = 0;
+  #sightMemory = 0;
+  #reactionTimer = 0;
+  #decisionTimer = 0;
+  #stuckTimer = 0;
+  #hadPlayerSample = false;
+  #wasVisible = false;
+  #noiseMemory = 0;
+  #navigationGraph = null;
+  #hasRoute = false;
+  #routeTimer = 0;
+
+  // Persistent scratch state. Do not return these except #shotDirection, which
+  // Game consumes synchronously before the next update.
   #patrolTarget = new THREE.Vector3();
-  #coverPoints  = [];
-  #coverTarget  = null;
+  #coverTarget = new THREE.Vector3();
+  #lastKnownPlayer = new THREE.Vector3();
+  #previousPlayer = new THREE.Vector3();
+  #playerVelocity = new THREE.Vector3();
+  #toPlayer = new THREE.Vector3();
+  #moveDirection = new THREE.Vector3();
+  #perpendicular = new THREE.Vector3();
+  #separation = new THREE.Vector3();
+  #probe = new THREE.Vector3();
+  #leftCandidate = new THREE.Vector3();
+  #rightCandidate = new THREE.Vector3();
+  #enemyEye = new THREE.Vector3();
+  #playerEye = new THREE.Vector3();
+  #coverEye = new THREE.Vector3();
+  #predictedTarget = new THREE.Vector3();
+  #shotDirection = new THREE.Vector3();
+  #shots = [];
+  #lastPosition = new THREE.Vector3();
+  #investigateTarget = new THREE.Vector3();
+  #routeWaypoint = new THREE.Vector3();
+  #routeGoal = new THREE.Vector3();
 
   /**
    * @param {import('../entities/Enemy.js').Enemy} enemy
@@ -28,271 +71,449 @@ export class EnemyAI {
   constructor(enemy, physics) {
     this.enemy = enemy;
     this.physics = physics;
+    this.#choosePatrolTarget();
+    this.#lastPosition.copy(enemy.position);
   }
 
   /** @param {{x:number,z:number}[]} points */
   setCoverPoints(points) {
-    this.#coverPoints = points ?? [];
+    this.#coverPoints = (points ?? []).filter(point =>
+      Number.isFinite(point?.x) && Number.isFinite(point?.z));
+  }
+
+  setNavigationGraph(graph) {
+    this.#navigationGraph = graph;
+    this.#hasRoute = false;
+  }
+
+  /** Sound is imperfect information: bots investigate it, but do not aim at it. */
+  hearNoise(position, intensity = 1) {
+    if (!this.enemy.alive) return;
+    const hearing = Config.enemy.ai.hearingRange * Math.max(0, intensity);
+    const dx = position.x - this.enemy.position.x;
+    const dz = position.z - this.enemy.position.z;
+    if (dx * dx + dz * dz > hearing * hearing) return;
+    this.#investigateTarget.copy(position);
+    this.#noiseMemory = Config.enemy.ai.investigateDuration;
+    if (!this.#wasVisible) this.#setState('investigate', Config.enemy.ai.investigateDuration);
+    this.#hasRoute = false;
   }
 
   /**
-   * Tick the AI. Returns an array of shoot-direction vectors (may be empty).
    * @param {number} dt
    * @param {THREE.Vector3} playerPos
-   * @param {object} diff  difficulty profile from DifficultyManager
-   * @returns {THREE.Vector3[]} shoot directions (world space)
+   * @param {object} diff difficulty profile
+   * @param {Array<{enemy:object}>|null} allies
+   * @returns {THREE.Vector3[]} shared shot list, consumed synchronously
    */
-  update(dt, playerPos, diff) {
-    if (!this.enemy.alive) return [];
+  update(dt, playerPos, diff, allies = null) {
+    if (!this.enemy.alive) return EMPTY_SHOTS;
+    this.#shots.length = 0;
+    this.#noiseMemory = Math.max(0, this.#noiseMemory - dt);
+    this.#routeTimer -= dt;
 
+    const ai = Config.enemy.ai;
     const enemyPos = this.enemy.position;
-    const toPlayer = new THREE.Vector3().subVectors(playerPos, enemyPos);
-    const dist = toPlayer.length();
-    toPlayer.normalize();
+    this.#samplePlayerVelocity(playerPos, dt);
 
-    // ── Retreat trigger (overrides normal transitions) ──
-    if (
-      diff.retreatEnabled &&
-      this.enemy.hp < Config.enemy.retreatHPThreshold &&
-      this.state !== 'retreat' &&
-      this.state !== 'cover'
-    ) {
-      this.state = 'retreat';
-      this.stateTimer = 3.0;
-      this.#pickNearestCover(enemyPos);
+    this.#toPlayer.subVectors(playerPos, enemyPos);
+    this.#toPlayer.y = 0;
+    const distanceSq = this.#toPlayer.lengthSq();
+    const distance = Math.sqrt(distanceSq);
+    if (distance > 0.0001) this.#toPlayer.multiplyScalar(1 / distance);
+
+    this.#enemyEye.set(enemyPos.x, enemyPos.y + ai.eyeHeight, enemyPos.z);
+    this.#playerEye.copy(playerPos);
+    const canSee = this.physics.hasLineOfSight(this.#enemyEye, this.#playerEye);
+
+    if (canSee) {
+      this.#lastKnownPlayer.copy(playerPos);
+      this.#sightMemory = ai.sightMemory;
+      if (!this.#wasVisible) this.#reactionTimer = diff.reactionTime;
+    } else {
+      this.#sightMemory = Math.max(0, this.#sightMemory - dt);
+    }
+    this.#wasVisible = canSee;
+    this.#reactionTimer = Math.max(0, this.#reactionTimer - dt);
+
+    const tookDamage = this.enemy.hp < this.#lastHP;
+    this.#lastHP = this.enemy.hp;
+    if (tookDamage) this.#underFireTimer = ai.underFireMemory;
+    else this.#underFireTimer = Math.max(0, this.#underFireTimer - dt);
+
+    this.stateTimer -= dt;
+    this.#decisionTimer -= dt;
+    this.#updateStuckDetection(dt);
+    if (this.#decisionTimer <= 0 || this.stateTimer <= 0 || tookDamage) {
+      this.#chooseTactic(distance, canSee, tookDamage, diff);
+      this.#decisionTimer = ai.decisionMin + Math.random() * (ai.decisionMax - ai.decisionMin);
     }
 
-    // ── Face the player ──
-    const tgt = Math.atan2(toPlayer.x, toPlayer.z);
-    let angleDiff = tgt - this.enemy.group.rotation.y;
-    while (angleDiff > Math.PI)  angleDiff -= Math.PI * 2;
-    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-    this.enemy.group.rotation.y += angleDiff * (5 + diff.tier * 2) * dt;
+    this.#turnToward(canSee ? playerPos : this.#lastKnownPlayer, dt, diff);
+    this.#computeMovement(distance, canSee);
+    this.#applySeparation(allies);
+    this.#avoidObstacles();
 
-    const canSee = this.physics.hasLineOfSight(
-      new THREE.Vector3(enemyPos.x, 1.5, enemyPos.z),
-      new THREE.Vector3(playerPos.x, Config.player.height, playerPos.z),
-    );
-
-    // ── State transitions ──
-    this.stateTimer -= dt;
-    if (this.stateTimer <= 0) this.#transitionState(dist, diff, canSee);
-
-    // ── Movement ──
-    const moveDir = this.#getMoveDirection(toPlayer, dist, enemyPos);
-    const spd = this.state === 'dodge' ? diff.enemySpeed * 2 : diff.enemySpeed;
-    if (moveDir.length() > 0) moveDir.normalize();
-    enemyPos.add(moveDir.multiplyScalar(spd * dt));
-    this.physics.resolveCollision(enemyPos, Config.enemy.radius);
+    if (this.#moveDirection.lengthSq() > 0.0001) {
+      this.#moveDirection.normalize();
+      const speedScale = this.state === 'dodge' ? ai.dodgeSpeedMultiplier
+        : this.state === 'retreat' ? ai.retreatSpeedMultiplier
+          : this.state === 'holdCover' ? 0 : 1;
+      enemyPos.addScaledVector(this.#moveDirection, diff.enemySpeed * speedScale * dt);
+      this.physics.resolveCollision(enemyPos, Config.enemy.radius, enemyPos.y, 2.15);
+    }
 
     const bound = Config.arena.size / 2 - 1.5;
     enemyPos.x = Math.max(-bound, Math.min(bound, enemyPos.x));
     enemyPos.z = Math.max(-bound, Math.min(bound, enemyPos.z));
+    enemyPos.y = this.#groundHeightAt(enemyPos.x, enemyPos.z);
 
-    // ── Shooting (halved in cover state) ──
-    return this.#handleShooting(dt, toPlayer, dist, canSee, diff, enemyPos);
+    this.#handleShooting(dt, playerPos, distance, canSee, diff);
+    return this.#shots;
   }
 
   reset() {
     this.state = 'patrol';
     this.stateTimer = 0;
-    this.burstRemaining = 0;
     this.fireCooldown = 0;
-    this.#coverTarget = null;
+    this.burstRemaining = 0;
+    this.burstCooldown = 0;
+    this.#hasCoverTarget = false;
+    this.#lastHP = this.enemy.hp;
+    this.#underFireTimer = 0;
+    this.#sightMemory = 0;
+    this.#reactionTimer = 0;
+    this.#decisionTimer = 0;
+    this.#stuckTimer = 0;
+    this.#hadPlayerSample = false;
+    this.#wasVisible = false;
+    this.#noiseMemory = 0;
+    this.#hasRoute = false;
+    this.#routeTimer = 0;
+    this.#lastPosition.copy(this.enemy.position);
+    this.#choosePatrolTarget();
   }
 
-  // ── Private: nearest cover helper ─────────────────────────
-
-  #pickNearestCover(enemyPos) {
-    const radius = Config.enemy.coverSeekRadius;
-    let best = null;
-    let bestDist = Infinity;
-    for (const pt of this.#coverPoints) {
-      const dx = pt.x - enemyPos.x;
-      const dz = pt.z - enemyPos.z;
-      const d = Math.sqrt(dx * dx + dz * dz);
-      if (d < radius && d < bestDist) { bestDist = d; best = pt; }
+  #samplePlayerVelocity(playerPos, dt) {
+    if (this.#hadPlayerSample && dt > 0.0001) {
+      this.#playerVelocity.subVectors(playerPos, this.#previousPlayer).multiplyScalar(1 / dt);
+      const maxSpeedSq = Config.enemy.ai.maxTrackedPlayerSpeed ** 2;
+      if (this.#playerVelocity.lengthSq() > maxSpeedSq) {
+        this.#playerVelocity.setLength(Config.enemy.ai.maxTrackedPlayerSpeed);
+      }
+    } else {
+      this.#playerVelocity.set(0, 0, 0);
+      this.#lastKnownPlayer.copy(playerPos);
+      this.#hadPlayerSample = true;
     }
-    this.#coverTarget = best;
+    this.#previousPlayer.copy(playerPos);
   }
 
-  // ── Private: state transitions ────────────────────────────
+  #chooseTactic(distance, canSee, tookDamage, diff) {
+    const ai = Config.enemy.ai;
+    const healthRatio = this.enemy.hp / Math.max(1, Config.enemy.maxHP + diff.tier * Config.difficulty.hpPerTier);
 
-  #transitionState(dist, diff, canSee) {
-    // cover state: triggered by low HP or random chance while strafing
-    if (
-      diff.coverChance > 0 &&
-      canSee &&
-      this.state === 'strafe' &&
-      Math.random() < diff.coverChance
-    ) {
-      this.#pickNearestCover(this.enemy.position);
-      if (this.#coverTarget) {
-        this.state = 'cover';
-        this.stateTimer = 1.5 + Math.random() * 1.5;
+    if (diff.retreatEnabled && this.enemy.hp <= Config.enemy.retreatHPThreshold) {
+      if ((this.state === 'retreat' || this.state === 'cover' || this.state === 'holdCover') && this.stateTimer > 0) return;
+      if (this.#selectTacticalCover()) this.#setState('retreat', ai.retreatDuration);
+      else this.#setState('dodge', ai.dodgeDuration);
+      return;
+    }
+
+    if (tookDamage && diff.coverChance > 0 && Math.random() < diff.coverChance + (1 - healthRatio) * 0.35) {
+      if (this.#selectTacticalCover()) {
+        this.#setState('cover', ai.coverTravelDuration);
         return;
       }
     }
 
-    // retreat → cover transition: arrived at cover
-    if (this.state === 'retreat') {
-      this.state = 'cover';
-      this.stateTimer = 3.0;
-      return;
-    }
-
-    // cover → re-engage
-    if (this.state === 'cover') {
-      this.state = 'chase';
-      this.stateTimer = 1.0 + Math.random();
-      this.#coverTarget = null;
-      return;
-    }
-
-    if (dist > 25) {
-      this.state = 'chase';
-      this.stateTimer = 1.5 + Math.random() * 1.5;
-      return;
-    }
-    if (dist < 6) {
-      if (Math.random() < diff.dodgeChance * 2) {
-        this.state = 'dodge';
-        this.strafeDir = Math.random() > 0.5 ? 1 : -1;
-        this.stateTimer = 0.4 + Math.random() * 0.3;
-      } else {
-        this.state = 'strafe';
-        this.strafeDir = Math.random() > 0.5 ? 1 : -1;
-        this.stateTimer = 1 + Math.random();
+    if (!canSee) {
+      if (this.#sightMemory > 0) this.#setState('hunt', ai.huntDuration);
+      else if (this.#noiseMemory > 0) this.#setState('investigate', ai.investigateDuration);
+      else {
+        this.#choosePatrolTarget();
+        this.#setState('patrol', ai.patrolDuration);
       }
       return;
     }
 
-    const r = Math.random();
-    if (r < 0.3) {
-      this.state = 'chase';
-      this.stateTimer = 1 + Math.random() * 1.5;
-    } else if (r < 0.55) {
-      this.state = 'strafe';
-      this.strafeDir = Math.random() > 0.5 ? 1 : -1;
-      this.stateTimer = 1.5 + Math.random() * 1.5;
-    } else if (r < 0.75 && diff.tier >= 1) {
-      this.state = 'flank';
-      this.strafeDir = Math.random() > 0.5 ? 1 : -1;
-      this.stateTimer = 2 + Math.random() * 2;
-    } else if (r < 0.85 && diff.tier >= 2) {
-      this.state = 'dodge';
-      this.strafeDir = Math.random() > 0.5 ? 1 : -1;
-      this.stateTimer = 0.5 + Math.random() * 0.4;
+    if (distance > ai.farRange) {
+      this.#setState('pursue', ai.pursueDuration);
+      return;
+    }
+    if (distance < ai.closeRange) {
+      this.strafeDir *= -1;
+      this.#setState(Math.random() < diff.dodgeChance + 0.25 ? 'dodge' : 'retreat', ai.dodgeDuration);
+      return;
+    }
+
+    const roll = Math.random();
+    const aggression = diff.aggression;
+    if (this.#underFireTimer > 0 && roll < diff.dodgeChance + 0.2) {
+      this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+      this.#setState('dodge', ai.dodgeDuration);
+    } else if (roll < 0.32 + aggression * 0.15) {
+      this.#setState('pursue', ai.pursueDuration);
+    } else if (roll < 0.72) {
+      this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+      this.#setState('strafe', ai.strafeDuration);
     } else {
-      this.state = 'patrol';
-      this.#patrolTarget.set(
-        (Math.random() - 0.5) * (Config.arena.size - 6), 0,
-        (Math.random() - 0.5) * (Config.arena.size - 6),
-      );
-      this.stateTimer = 2 + Math.random() * 2;
+      this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+      this.#setState('flank', ai.flankDuration);
     }
   }
 
-  // ── Private: movement per state ───────────────────────────
+  #setState(state, duration) {
+    this.state = state;
+    this.stateTimer = duration * (0.8 + Math.random() * 0.4);
+  }
 
-  #getMoveDirection(toPlayer, dist, enemyPos) {
-    const dir = new THREE.Vector3();
+  #computeMovement(distance, canSee) {
+    const ai = Config.enemy.ai;
+    const dir = this.#moveDirection.set(0, 0, 0);
+    const perp = this.#perpendicular.set(-this.#toPlayer.z, 0, this.#toPlayer.x);
+    const rangeCorrection = distance > ai.optimalRangeMax ? 0.65
+      : distance < ai.optimalRangeMin ? -0.75 : 0;
+
     switch (this.state) {
-      case 'chase':
-        dir.copy(toPlayer);
+      case 'pursue':
+        if (distance < ai.optimalRangeMin) dir.copy(this.#toPlayer).multiplyScalar(-0.65);
+        else this.#steerToward(this.#lastKnownPlayer, dir);
+        dir.addScaledVector(perp, this.strafeDir * 0.2);
         break;
-      case 'strafe': {
-        const perp = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
+      case 'strafe':
         dir.copy(perp).multiplyScalar(this.strafeDir);
-        if (dist > 12) dir.add(toPlayer.clone().multiplyScalar(0.4));
+        dir.addScaledVector(this.#toPlayer, rangeCorrection);
         break;
-      }
-      case 'flank': {
-        const perp = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
-        dir.copy(perp).multiplyScalar(this.strafeDir * 0.7);
-        dir.add(toPlayer.clone().multiplyScalar(0.5));
-        break;
-      }
-      case 'dodge': {
-        const perp = new THREE.Vector3(-toPlayer.z, 0, toPlayer.x);
+      case 'flank':
         dir.copy(perp).multiplyScalar(this.strafeDir);
+        dir.addScaledVector(this.#toPlayer, 0.35 + rangeCorrection * 0.5);
         break;
-      }
-      case 'patrol': {
-        const toTgt = new THREE.Vector3().subVectors(this.#patrolTarget, enemyPos);
-        toTgt.y = 0;
-        if (toTgt.length() < 2) this.stateTimer = 0;
-        dir.copy(toTgt).normalize();
+      case 'dodge':
+        dir.copy(perp).multiplyScalar(this.strafeDir);
+        dir.addScaledVector(this.#toPlayer, distance < ai.closeRange ? -0.35 : 0.1);
         break;
-      }
-      case 'cover': {
-        if (this.#coverTarget) {
-          const toCover = new THREE.Vector3(
-            this.#coverTarget.x - enemyPos.x, 0,
-            this.#coverTarget.z - enemyPos.z,
-          );
-          if (toCover.length() < 2) { this.stateTimer = 0; break; }
-          dir.copy(toCover).normalize();
-        }
-        break;
-      }
-      case 'retreat': {
-        // Move away from player; also steer toward nearest cover
-        dir.copy(toPlayer).multiplyScalar(-1);
-        if (this.#coverTarget) {
-          const toCover = new THREE.Vector3(
-            this.#coverTarget.x - enemyPos.x, 0,
-            this.#coverTarget.z - enemyPos.z,
-          );
-          if (toCover.length() < 2) {
-            this.stateTimer = 0; // arrived — will transition to cover
+      case 'retreat':
+        dir.copy(this.#toPlayer).multiplyScalar(-0.8);
+        if (this.#hasCoverTarget) {
+          this.#probe.subVectors(this.#coverTarget, this.enemy.position).setY(0);
+          if (this.#probe.lengthSq() <= ai.coverArrivalRadius ** 2) {
+            this.#setState('holdCover', ai.coverHoldDuration);
           } else {
-            dir.add(toCover.normalize().multiplyScalar(0.6));
+            dir.addScaledVector(this.#probe.normalize(), 0.9);
           }
         }
         break;
-      }
+      case 'cover':
+        if (!this.#hasCoverTarget) break;
+        this.#steerToward(this.#coverTarget, dir);
+        if (this.enemy.position.distanceToSquared(this.#coverTarget) <= ai.coverArrivalRadius ** 2) {
+          dir.set(0, 0, 0);
+          this.#setState('holdCover', ai.coverHoldDuration);
+        }
+        break;
+      case 'holdCover':
+        break;
+      case 'hunt':
+        this.#steerToward(this.#lastKnownPlayer, dir);
+        if (this.enemy.position.distanceToSquared(this.#lastKnownPlayer) <= ai.searchArrivalRadius ** 2) {
+          this.strafeDir *= -1;
+          this.#setState(canSee ? 'strafe' : 'flank', ai.strafeDuration);
+        }
+        break;
+      case 'investigate':
+        this.#steerToward(this.#investigateTarget, dir);
+        if (this.enemy.position.distanceToSquared(this.#investigateTarget) <= ai.searchArrivalRadius ** 2) {
+          // Search from a nearby hiding/ambush position instead of standing on
+          // the exact sound origin, which makes movement less predictable.
+          if (this.#navigationGraph?.getTaggedPosition('ambush', this.enemy.position, this.#patrolTarget)) {
+            this.#setState('ambush', ai.ambushDuration);
+            this.#hasRoute = false;
+          } else {
+            this.#choosePatrolTarget();
+            this.#setState('patrol', ai.patrolDuration);
+          }
+        }
+        break;
+      case 'ambush':
+        this.#steerToward(this.#patrolTarget, dir);
+        if (this.enemy.position.distanceToSquared(this.#patrolTarget) <= ai.routeArrivalRadius ** 2) dir.set(0, 0, 0);
+        break;
+      case 'patrol':
+      default:
+        this.#steerToward(this.#patrolTarget, dir);
+        if (this.enemy.position.distanceToSquared(this.#patrolTarget) <= ai.searchArrivalRadius ** 2) {
+          this.#choosePatrolTarget();
+          this.stateTimer = 0;
+        }
     }
-    dir.y = 0;
-    return dir;
   }
 
-  // ── Private: shooting / burst ─────────────────────────────
+  #applySeparation(allies) {
+    if (!allies?.length) return;
+    const radiusSq = Config.enemy.ai.separationRadius ** 2;
+    const pos = this.enemy.position;
+    this.#separation.set(0, 0, 0);
+    for (const ally of allies) {
+      if (!ally?.enemy?.alive || ally.enemy === this.enemy) continue;
+      const other = ally.enemy.position;
+      const dx = pos.x - other.x;
+      const dz = pos.z - other.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq > 0.0001 && distSq < radiusSq) {
+        this.#separation.x += dx / distSq;
+        this.#separation.z += dz / distSq;
+      }
+    }
+    if (this.#separation.lengthSq() > 0) {
+      this.#moveDirection.addScaledVector(this.#separation.normalize(), Config.enemy.ai.separationWeight);
+    }
+  }
 
-  #handleShooting(dt, toPlayer, dist, canSee, diff, enemyPos) {
-    /** @type {THREE.Vector3[]} */
-    const shots = [];
+  #avoidObstacles() {
+    if (this.#moveDirection.lengthSq() < 0.0001) return;
+    const ai = Config.enemy.ai;
+    this.#moveDirection.normalize();
+    this.#probe.copy(this.enemy.position).addScaledVector(this.#moveDirection, ai.avoidanceProbe);
+    if (this.physics.isWalkable(this.#probe, Config.enemy.radius)) return;
 
+    this.#leftCandidate.set(-this.#moveDirection.z, 0, this.#moveDirection.x);
+    this.#rightCandidate.copy(this.#leftCandidate).multiplyScalar(-1);
+    this.#probe.copy(this.enemy.position).addScaledVector(this.#leftCandidate, ai.avoidanceProbe);
+    const leftClear = this.physics.isWalkable(this.#probe, Config.enemy.radius);
+    this.#probe.copy(this.enemy.position).addScaledVector(this.#rightCandidate, ai.avoidanceProbe);
+    const rightClear = this.physics.isWalkable(this.#probe, Config.enemy.radius);
+
+    if (leftClear || rightClear) {
+      const side = leftClear && rightClear
+        ? (this.strafeDir < 0 ? this.#leftCandidate : this.#rightCandidate)
+        : (leftClear ? this.#leftCandidate : this.#rightCandidate);
+      this.#moveDirection.copy(side);
+    } else {
+      this.#moveDirection.multiplyScalar(-1);
+      this.strafeDir *= -1;
+      this.#decisionTimer = 0;
+    }
+  }
+
+  #selectTacticalCover() {
+    const ai = Config.enemy.ai;
+    const pos = this.enemy.position;
+    let bestScore = Infinity;
+    let found = false;
+
+    for (const point of this.#coverPoints) {
+      const bound = Config.arena.size / 2 - Config.enemy.radius - 0.5;
+      if (Math.abs(point.x) > bound || Math.abs(point.z) > bound) continue;
+      const dx = point.x - pos.x;
+      const dz = point.z - pos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq > Config.enemy.coverSeekRadius ** 2) continue;
+      this.#coverEye.set(point.x, this.#groundHeightAt(point.x, point.z) + ai.eyeHeight, point.z);
+      if (!this.physics.isWalkable(this.#coverEye, Config.enemy.radius)) continue;
+      const exposed = this.physics.hasLineOfSight(this.#coverEye, this.#playerEye);
+      const playerDistSq = this.#coverEye.distanceToSquared(this.#playerEye);
+      const score = distSq + (exposed ? ai.exposedCoverPenalty : 0) - playerDistSq * ai.coverDistanceWeight;
+      if (score < bestScore) {
+        bestScore = score;
+        this.#coverTarget.set(point.x, this.#groundHeightAt(point.x, point.z), point.z);
+        found = true;
+      }
+    }
+    this.#hasCoverTarget = found;
+    return found;
+  }
+
+  #turnToward(target, dt, diff) {
+    const dx = target.x - this.enemy.position.x;
+    const dz = target.z - this.enemy.position.z;
+    if (dx * dx + dz * dz < 0.0001) return;
+    const desired = Math.atan2(dx, dz);
+    const delta = shortestAngle(desired - this.enemy.group.rotation.y);
+    const turnRate = Config.enemy.ai.turnRateBase + diff.tier * Config.enemy.ai.turnRatePerTier;
+    this.enemy.group.rotation.y += delta * Math.min(1, turnRate * dt);
+  }
+
+  #handleShooting(dt, playerPos, distance, canSee, diff) {
     this.fireCooldown -= dt;
     this.burstCooldown -= dt;
-
-    // Fire rate halved while in cover (reloading behaviour)
-    const fireRateMod = this.state === 'cover' ? 2 : 1;
-
-    // Fire burst bullets
-    if (this.burstRemaining > 0 && this.burstCooldown <= 0 && canSee) {
-      this.burstRemaining--;
-      this.burstCooldown = 0.1;
-      const dir = this.#aimWithSpread(toPlayer, diff.accuracy);
-      shots.push(dir);
+    if (!canSee || this.#reactionTimer > 0 || distance > Config.enemy.range) {
+      this.burstRemaining = 0;
+      return;
     }
 
-    // Start new burst
-    if (this.fireCooldown <= 0 && dist < Config.enemy.range && canSee) {
-      this.fireCooldown = (diff.fireRate + Math.random() * 0.2) * fireRateMod;
+    if (this.burstRemaining > 0 && this.burstCooldown <= 0) {
+      this.burstRemaining--;
+      this.burstCooldown = Config.enemy.ai.burstSpacing;
+      this.#buildShotDirection(playerPos, distance, diff);
+      this.#shots.push(this.#shotDirection);
+    }
+
+    if (this.fireCooldown <= 0 && this.burstRemaining <= 0) {
+      const coverPenalty = this.state === 'holdCover' ? Config.enemy.ai.coverFireRateMultiplier : 1;
+      this.fireCooldown = (diff.fireRate + Math.random() * Config.enemy.ai.fireRateJitter) * coverPenalty;
       this.burstRemaining = diff.burstCount;
       this.burstCooldown = 0;
     }
-
-    return shots;
   }
 
-  #aimWithSpread(toPlayer, accuracy) {
-    const dir = toPlayer.clone();
-    dir.x += (Math.random() - 0.5) * accuracy;
-    dir.y += (Math.random() - 0.5) * accuracy * 0.4;
-    dir.z += (Math.random() - 0.5) * accuracy;
-    return dir.normalize();
+  #buildShotDirection(playerPos, distance, diff) {
+    const travelTime = Math.min(Config.enemy.ai.maxPredictionTime, distance / Config.weapon.bulletSpeed);
+    this.#predictedTarget.copy(playerPos)
+      .addScaledVector(this.#playerVelocity, travelTime * diff.aimLead);
+    this.#shotDirection.subVectors(this.#predictedTarget, this.#enemyEye);
+    this.#shotDirection.x += (Math.random() - 0.5) * diff.accuracy;
+    this.#shotDirection.y += (Math.random() - 0.5) * diff.accuracy * 0.35;
+    this.#shotDirection.z += (Math.random() - 0.5) * diff.accuracy;
+    this.#shotDirection.normalize();
+  }
+
+  #updateStuckDetection(dt) {
+    const movedSq = this.enemy.position.distanceToSquared(this.#lastPosition);
+    if (this.#moveDirection.lengthSq() > 0.1 && movedSq < Config.enemy.ai.stuckDistance ** 2) {
+      this.#stuckTimer += dt;
+      if (this.#stuckTimer >= Config.enemy.ai.stuckTime) {
+        this.strafeDir *= -1;
+        this.#setState('dodge', Config.enemy.ai.dodgeDuration);
+        this.#decisionTimer = 0;
+        this.#stuckTimer = 0;
+      }
+    } else {
+      this.#stuckTimer = 0;
+    }
+    this.#lastPosition.copy(this.enemy.position);
+  }
+
+  #choosePatrolTarget() {
+    if (this.#navigationGraph?.getRandomPosition(this.#patrolTarget)) {
+      this.#hasRoute = false;
+      return;
+    }
+    const span = Config.arena.size - Config.enemy.ai.patrolInset * 2;
+    this.#patrolTarget.set(
+      (Math.random() - 0.5) * span,
+      0,
+      (Math.random() - 0.5) * span,
+    );
+  }
+
+  #steerToward(target, out) {
+    if (!this.#navigationGraph || this.#navigationGraph.empty) {
+      out.subVectors(target, this.enemy.position).setY(0);
+      return;
+    }
+    const goalMoved = this.#routeGoal.distanceToSquared(target) > 4;
+    const reachedWaypoint = this.#hasRoute && this.enemy.position.distanceToSquared(this.#routeWaypoint)
+      <= Config.enemy.ai.routeArrivalRadius ** 2;
+    if (goalMoved || reachedWaypoint || this.#routeTimer <= 0) {
+      this.#routeGoal.copy(target);
+      this.#hasRoute = this.#navigationGraph.findNextWaypoint(this.enemy.position, target, this.#routeWaypoint);
+      this.#routeTimer = 0.55;
+    }
+    out.subVectors(this.#hasRoute ? this.#routeWaypoint : target, this.enemy.position).setY(0);
+  }
+
+  #groundHeightAt(x, z) {
+    return this.physics.groundHeightAt?.(x, z) ?? 0;
   }
 }
-

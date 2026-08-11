@@ -1,4 +1,5 @@
 import { Config } from '../Config.js';
+import { Lifetime } from '../core/Lifetime.js';
 
 /**
  * HUD — reads game state and writes to DOM elements.
@@ -6,6 +7,7 @@ import { Config } from '../Config.js';
  */
 export class HUD {
   #els;
+  #lifetime = new Lifetime();
 
   constructor() {
     this.#els = {
@@ -106,13 +108,13 @@ export class HUD {
 
   flashHitMarker() {
     this.#els.hitMarker.classList.add('show');
-    setTimeout(() => this.#els.hitMarker.classList.remove('show'), 120);
+    this.#lifetime.timeout(() => this.#els.hitMarker.classList.remove('show'), 120);
   }
 
   flashDamage() {
     const el = document.getElementById('damage-overlay');
     el.classList.add('hit');
-    setTimeout(() => el.classList.remove('hit'), 150);
+    this.#lifetime.timeout(() => el.classList.remove('hit'), 150);
   }
 
   showKillMessage() {
@@ -126,10 +128,17 @@ export class HUD {
     entry.className = 'kill-feed-entry';
     entry.textContent = text;
     this.#els.killFeed.appendChild(entry);
-    setTimeout(() => entry.remove(), 3200);
+    this.#lifetime.timeout(() => entry.remove(), 3200);
   }
 
   clearKillFeed() {
     this.#els.killFeed.innerHTML = '';
+  }
+
+  destroy() {
+    this.#lifetime.dispose();
+    this.clearKillFeed();
+    this.#els.hitMarker?.classList.remove('show');
+    document.getElementById('damage-overlay')?.classList.remove('hit');
   }
 }

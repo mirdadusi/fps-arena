@@ -8,6 +8,7 @@ export class ChatUI {
   #input;
   #visible = false;
   #onSend = null;
+  #lifetime = new Lifetime();
 
   constructor() {
     this.#el    = document.getElementById('chat-panel');
@@ -20,7 +21,7 @@ export class ChatUI {
   onSend(cb) { this.#onSend = cb; }
 
   #bindKeys() {
-    document.addEventListener('keydown', e => {
+    this.#lifetime.listen(document, 'keydown', e => {
       if (e.code === 'Enter') {
         if (this.#visible) {
           this.#send();
@@ -81,13 +82,21 @@ export class ChatUI {
     this.#log.scrollTop = this.#log.scrollHeight;
 
     // Fade message after 8s
-    setTimeout(() => {
+    this.#lifetime.timeout(() => {
       el.classList.add('fade');
-      setTimeout(() => el.remove(), 1000);
+      this.#lifetime.timeout(() => el.remove(), 1000);
     }, 8000);
   }
 
   addSystem(text) {
     this.addMessage('System', text, '#f80');
   }
+
+  destroy() {
+    this.close();
+    this.#onSend = null;
+    this.#lifetime.dispose();
+    if (this.#log) this.#log.innerHTML = '';
+  }
 }
+import { Lifetime } from '../core/Lifetime.js';

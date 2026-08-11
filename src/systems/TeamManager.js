@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
 
 /**
  * TeamManager — handles team deathmatch and capture-the-flag modes.
@@ -223,10 +224,16 @@ export class TeamManager {
   destroy() {
     for (const team of ['red', 'blue']) {
       if (this.#flagMeshes[team]) {
-        this.#scene.remove(this.#flagMeshes[team].pole);
-        this.#scene.remove(this.#flagMeshes[team].flag);
-        this.#scene.remove(this.#flagMeshes[team].base);
+        const meshes = this.#flagMeshes[team];
+        this.#scene.remove(meshes.pole);
+        this.#scene.remove(meshes.flag);
+        this.#scene.remove(meshes.base);
+        disposeObject3D(meshes.pole);
+        disposeObject3D(meshes.flag);
+        disposeObject3D(meshes.base);
       }
     }
+    this.#flagMeshes = {};
+    this.#flagBases = {};
   }
 }

@@ -19,6 +19,10 @@ function _getOrCreateMat(color) {
 export class BulletSystem {
   #bullets = [];
   #geo = new THREE.SphereGeometry(0.08, 6, 6);
+  #step = new THREE.Vector3();
+  #direction = new THREE.Vector3();
+  #toTarget = new THREE.Vector3();
+  #nearestPoint = new THREE.Vector3();
 
   constructor(scene, physics) {
     this.scene = scene;
@@ -47,7 +51,7 @@ export class BulletSystem {
   update(dt, callbacks) {
     for (let i = this.#bullets.length - 1; i >= 0; i--) {
       const b = this.#bullets[i];
-      b.mesh.position.add(b.velocity.clone().multiplyScalar(dt));
+      b.mesh.position.addScaledVector(b.velocity, dt);
       b.life -= dt;
 
       if (b.life <= 0 || this.physics.pointInsideWall(b.mesh.position)) {
@@ -74,16 +78,16 @@ export class BulletSystem {
 
   testPlayerHit(bullet, cameraPos, dt) {
     const bpos = bullet.mesh.position;
-    const step = bullet.velocity.clone().multiplyScalar(dt);
+    const step = this.#step.copy(bullet.velocity).multiplyScalar(dt);
     const stepLen = step.length();
     const hitRadius = 1.0;
 
     let closest = bpos.distanceTo(cameraPos);
     if (stepLen > 0.001) {
-      const dir = step.clone().normalize();
-      const toCam = new THREE.Vector3().subVectors(cameraPos, bpos);
+      const dir = this.#direction.copy(step).normalize();
+      const toCam = this.#toTarget.subVectors(cameraPos, bpos);
       const t = Math.max(0, Math.min(stepLen, toCam.dot(dir)));
-      const nearestPt = bpos.clone().add(dir.multiplyScalar(t));
+      const nearestPt = this.#nearestPoint.copy(bpos).addScaledVector(dir, t);
       closest = nearestPt.distanceTo(cameraPos);
     }
     return closest < hitRadius;

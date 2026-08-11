@@ -44,7 +44,7 @@ export class ParticleSystem {
     for (let i = this.#particles.length - 1; i >= 0; i--) {
       const p = this.#particles[i];
       p.velocity.y -= Config.physics.gravity * dt;
-      p.mesh.position.add(p.velocity.clone().multiplyScalar(dt));
+      p.mesh.position.addScaledVector(p.velocity, dt);
       p.life -= dt;
       p.mesh.material.opacity = p.life;
       if (p.life <= 0) {
@@ -62,5 +62,6 @@ export class ParticleSystem {
       p.mesh.material.dispose();
     }
     this.#particles.length = 0;
+    _sharedGeo.dispose();
   }
 }

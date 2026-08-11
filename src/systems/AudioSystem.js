@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'fps-arena-volume';
+import { PersistenceStore } from '../stores/PersistenceStore.js';
 
 /**
  * AudioSystem — synthesises all game sounds with the Web Audio API.
@@ -17,10 +17,11 @@ export class AudioSystem {
   #ambientOsc1 = null;
   #ambientOsc2 = null;
   #ambientGain = null;
+  #ambientRequested = false;
+  #disposed = false;
 
   constructor() {
-    const stored = parseFloat(localStorage.getItem(STORAGE_KEY));
-    if (!isNaN(stored)) this.#volume = Math.max(0, Math.min(1, stored));
+    this.#volume = PersistenceStore.getVolume();
   }
 
   /**
@@ -28,13 +29,19 @@ export class AudioSystem {
    * Creates the AudioContext and master gain node.
    */
   init() {
-    if (this.#ctx) return;
+    if (this.#disposed) return;
+    if (this.#ctx) {
+      if (this.#ctx.state === 'suspended') void this.#ctx.resume();
+      if (this.#ambientRequested) this.#startAmbientNodes();
+      return;
+    }
     try {
       this.#ctx = new (window.AudioContext || window.webkitAudioContext)();
       this.#masterGain = this.#ctx.createGain();
       this.#masterGain.gain.value = this.#volume;
       this.#masterGain.connect(this.#ctx.destination);
       this.#enabled = true;
+      if (this.#ambientRequested) this.#startAmbientNodes();
     } catch (e) {
       console.warn('[AudioSystem] Failed to create AudioContext:', e);
     }
@@ -53,7 +60,7 @@ export class AudioSystem {
   setVolume(v) {
     this.#volume = Math.max(0, Math.min(1, v));
     if (this.#masterGain) this.#masterGain.gain.value = this.#volume;
-    localStorage.setItem(STORAGE_KEY, String(this.#volume));
+    PersistenceStore.setVolume(this.#volume);
   }
 
   // ── Public playback API ───────────────────────────────────
@@ -158,7 +165,12 @@ export class AudioSystem {
   }
 
   startAmbient() {
-    if (!this.#enabled || this.#ambientOsc1) return;
+    this.#ambientRequested = true;
+    this.#startAmbientNodes();
+  }
+
+  #startAmbientNodes() {
+    if (!this.#enabled || this.#ambientOsc1 || this.#disposed) return;
     const ctx = this.#ctx;
     const gain = ctx.createGain();
     gain.gain.value = 0.05;
@@ -182,6 +194,7 @@ export class AudioSystem {
   }
 
   stopAmbient() {
+    this.#ambientRequested = false;
     if (!this.#ambientOsc1) return;
     try {
       this.#ambientOsc1.stop();
@@ -191,6 +204,23 @@ export class AudioSystem {
     this.#ambientOsc1 = null;
     this.#ambientOsc2 = null;
     this.#ambientGain = null;
+  }
+
+  /** Close the context so browser context limits are never consumed by restarts. */
+  async dispose() {
+    if (this.#disposed) return;
+    this.stopAmbient();
+    this.#disposed = true;
+    this.#enabled = false;
+    const ctx = this.#ctx;
+    try { this.#masterGain?.disconnect(); } catch { /* already disconnected */ }
+    this.#masterGain = null;
+    this.#ctx = null;
+    if (ctx && ctx.state !== 'closed') {
+      try { await ctx.close(); } catch (error) {
+        console.warn('[AudioSystem] Failed to close AudioContext:', error);
+      }
+    }
   }
 
   // ── Weapon synthesis ──────────────────────────────────────

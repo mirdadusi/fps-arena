@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Config } from './Config.js';
 import { EventBus, GameEvents } from './EventBus.js';
+import { Lifetime } from './core/Lifetime.js';
 
 // World
 import { Arena } from './world/Arena.js';
@@ -27,6 +28,7 @@ import { TeamManager } from './systems/TeamManager.js';
 import { EnemyAI } from './ai/EnemyAI.js';
 import { DifficultyManager } from './ai/DifficultyManager.js';
 import { extractCoverPoints } from './ai/CoverPoints.js';
+import { NavigationGraph } from './ai/NavigationGraph.js';
 
 // UI
 import { HUD } from './ui/HUD.js';
@@ -57,6 +59,15 @@ export class Game {
   #grenades;
   #teams;
   #difficulty = new DifficultyManager();
+  #lifetime = new Lifetime();
+  #portraitTexture = null;
+  #coverPoints = [];
+  #navigationGraph;
+  #destroyed = false;
+  #primaryDown = false;
+  #scratchOrigin = new THREE.Vector3();
+  #scratchDirection = new THREE.Vector3();
+  #scratchWorldPosition = new THREE.Vector3();
 
   // Bots
   #bots = [];
@@ -103,13 +114,22 @@ export class Game {
     this.#arena    = new Arena(config.arena || 'classic');
     this.#player   = new Player(this.#arena.camera);
     this.#weapon   = new Weapon(this.#arena.camera);
-    this.#physics  = new PhysicsSystem(this.#arena.colliders);
+    this.#physics  = new PhysicsSystem(this.#arena.colliders, {
+      groundHeightAt: (x, z) => this.#arena.getGroundHeight(x, z),
+    });
+    this.#navigationGraph = new NavigationGraph(this.#arena.navigationNodes, this.#physics);
     this.#bullets  = new BulletSystem(this.#arena.scene, this.#physics);
     this.#particles = new ParticleSystem(this.#arena.scene);
     this.#audio    = new AudioSystem();
-    this.#pickups  = new PickupSystem(this.#arena.scene);
+    this.#pickups  = new PickupSystem(this.#arena.scene, (x, z) => this.#arena.getGroundHeight(x, z));
     this.#grenades = new GrenadeSystem(this.#arena.scene, this.#physics);
     this.#teams    = new TeamManager(this.#arena.scene);
+
+    if (config.botPortrait) {
+      this.#portraitTexture = new THREE.TextureLoader().load(config.botPortrait);
+      this.#portraitTexture.colorSpace = THREE.SRGBColorSpace;
+    }
+    this.#coverPoints = extractCoverPoints(this.#arena.colliders);
 
     // Team / game mode setup
     this.#teams.init(config.gameMode || 'ffa', config.team || null, Config.arena.size);
@@ -128,7 +148,7 @@ export class Game {
     // Place player at a spawn point
     if (this.#arena.playerSpawns.length) {
       const sp = this.#arena.playerSpawns[0];
-      this.#player.position.set(sp.x, Config.player.height, sp.z);
+      this.#player.position.set(sp.x, this.#arena.getGroundHeight(sp.x, sp.z) + Config.player.height, sp.z);
     }
 
     // Multiplayer
@@ -158,12 +178,13 @@ export class Game {
   #spawnBots(count) {
     const spawns = this.#arena.playerSpawns;
     for (let i = 0; i < count; i++) {
-      const enemy = new Enemy(this.#arena.scene);
+      const enemy = new Enemy(this.#arena.scene, this.#portraitTexture);
       const ai    = new EnemyAI(enemy, this.#physics);
-      ai.setCoverPoints(extractCoverPoints(this.#arena.colliders));
+      ai.setCoverPoints(this.#coverPoints);
+      ai.setNavigationGraph(this.#navigationGraph);
       const sp = spawns[(i + 1) % spawns.length] || { x: 20, z: -20 };
       const diff = this.#difficulty.getProfile(0);
-      enemy.spawn(new THREE.Vector3(sp.x, 0, sp.z), diff.enemyHP);
+      enemy.spawn(new THREE.Vector3(sp.x, this.#arena.getGroundHeight(sp.x, sp.z), sp.z), diff.enemyHP);
       this.#bots.push({ enemy, ai });
     }
   }
@@ -250,38 +271,63 @@ export class Game {
     });
 
     on('disconnected', () => {
-      this.#hud.addKillFeed('Disconnected from server');
+      this.#hud.addKillFeed('Connection lost — reconnecting…');
+    });
+
+    on('reconnecting', msg => {
+      this.#hud.addKillFeed(`Reconnect attempt ${msg.attempt}…`);
+    });
+
+    on('reconnected', () => {
+      this.#hud.addKillFeed('Reconnected to match');
+    });
+
+    on('reconnect_failed', () => {
+      this.#hud.addKillFeed('Match expired — returning to lobby');
+      this.#lifetime.timeout(() => this.#onReturn?.(), 1400);
     });
   }
 
   // ── Event wiring ──────────────────────────────────────────
 
   #bindEvents() {
-    document.addEventListener('pointerlockchange', () => {
+    this.#lifetime.listen(document, 'pointerlockchange', () => {
       this.#locked = document.pointerLockElement === this.#arena.renderer.domElement;
       if (this.#locked) {
         this.#ui.hideBlocker();
         this.#audio.init();
       } else if (!this.#gameOver) {
+        this.#primaryDown = false;
+        this.#weapon.setAiming(false);
         this.#ui.showBlocker();
       }
     });
 
-    document.addEventListener('pointerlockerror', () => {
+    this.#lifetime.listen(document, 'pointerlockerror', () => {
       const el = document.getElementById('pointer-lock-error');
       if (el) el.style.display = 'block';
     });
 
-    document.addEventListener('mousedown', e => {
+    this.#lifetime.listen(document, 'mousedown', e => {
+      if (e.target instanceof Element && e.target.closest('button, a, input, [data-game-action]')) return;
       if (this.#chat.isOpen) return;
       if (!this.#locked && !this.#gameOver && !this.#touch.active) {
-        this.#arena.renderer.domElement.requestPointerLock();
+        this.#requestPointerLock();
         return;
       }
       if (e.button === 0) this.#playerShoot();
+      if (e.button === 0) this.#primaryDown = true;
+      if (e.button === 2) this.#weapon.setAiming(true);
+    });
+    this.#lifetime.listen(document, 'mouseup', e => {
+      if (e.button === 0) this.#primaryDown = false;
+      if (e.button === 2) this.#weapon.setAiming(false);
+    });
+    this.#lifetime.listen(document, 'contextmenu', e => {
+      if (this.#locked) e.preventDefault();
     });
 
-    document.addEventListener('keydown', e => {
+    this.#lifetime.listen(document, 'keydown', e => {
       if (this.#chat.isOpen) return;
       if (e.code === 'KeyR' && this.#locked) this.#weapon.startReload();
 
@@ -296,7 +342,7 @@ export class Game {
     });
 
     // Scroll wheel for weapon switching
-    document.addEventListener('wheel', e => {
+    this.#lifetime.listen(document, 'wheel', e => {
       if (this.#locked && !this.#chat.isOpen) {
         this.#weapon.scrollWeapon(e.deltaY);
       }
@@ -305,7 +351,7 @@ export class Game {
     // Mute toggle button
     const muteBtn = document.getElementById('mute-btn');
     if (muteBtn) {
-      muteBtn.addEventListener('click', e => {
+      this.#lifetime.listen(muteBtn, 'click', e => {
         e.stopPropagation();
         if (this.#audio.volume > 0) {
           muteBtn.dataset.prevVolume = String(this.#audio.volume);
@@ -320,19 +366,43 @@ export class Game {
     }
 
     // AudioSystem EventBus subscriptions
-    this.#bus.on(GameEvents.PLAYER_SHOT,      d => this.#audio.playShot(d?.weaponKey));
-    this.#bus.on(GameEvents.BULLET_HIT_WALL,  () => this.#audio.playImpactWall());
-    this.#bus.on(GameEvents.BULLET_HIT_ENEMY, () => this.#audio.playImpactEnemy());
-    this.#bus.on(GameEvents.PLAYER_RELOADED,  () => this.#audio.playReload());
-    this.#bus.on(GameEvents.GRENADE_EXPLODE,  () => this.#audio.playExplosion());
-    this.#bus.on(GameEvents.PLAYER_DAMAGED,   () => this.#audio.playDamage());
-    this.#bus.on(GameEvents.PICKUP_COLLECTED, d => this.#audio.playPickup(d?.type));
-    this.#bus.on(GameEvents.ENEMY_DIED,       () => this.#audio.playEnemyDeath());
-    this.#bus.on(GameEvents.GAME_STARTED,     () => this.#audio.startAmbient());
-    this.#bus.on(GameEvents.GAME_OVER,        () => this.#audio.stopAmbient());
+    const onBus = (type, callback) => this.#lifetime.add(this.#bus.on(type, callback));
+    onBus(GameEvents.PLAYER_SHOT,      d => this.#audio.playShot(d?.weaponKey));
+    onBus(GameEvents.BULLET_HIT_WALL,  () => this.#audio.playImpactWall());
+    onBus(GameEvents.BULLET_HIT_ENEMY, () => this.#audio.playImpactEnemy());
+    onBus(GameEvents.PLAYER_RELOADED,  () => this.#audio.playReload());
+    onBus(GameEvents.GRENADE_EXPLODE,  () => this.#audio.playExplosion());
+    onBus(GameEvents.PLAYER_DAMAGED,   () => this.#audio.playDamage());
+    onBus(GameEvents.PICKUP_COLLECTED, d => this.#audio.playPickup(d?.type));
+    onBus(GameEvents.ENEMY_DIED,       () => this.#audio.playEnemyDeath());
+    onBus(GameEvents.GAME_STARTED,     () => this.#audio.startAmbient());
+    onBus(GameEvents.GAME_OVER,        () => this.#audio.stopAmbient());
 
     this.#ui.onGameOverClick(() => this.#resetGame());
-    window.addEventListener('resize', () => this.#arena.onResize());
+    this.#lifetime.listen(window, 'resize', () => this.#arena.onResize());
+
+    this.#lifetime.listen(document.getElementById('resume-game-btn'), 'click', e => {
+      e.stopPropagation();
+      this.#requestPointerLock();
+    });
+    this.#lifetime.listen(document.getElementById('return-lobby-btn'), 'click', e => {
+      e.stopPropagation();
+      this.#network?.leaveRoom();
+      this.#onReturn?.();
+    });
+  }
+
+  #requestPointerLock() {
+    try {
+      const result = this.#arena.renderer.domElement.requestPointerLock();
+      result?.catch?.(() => {
+        const el = document.getElementById('pointer-lock-error');
+        if (el) el.style.display = 'block';
+      });
+    } catch {
+      const el = document.getElementById('pointer-lock-error');
+      if (el) el.style.display = 'block';
+    }
   }
 
   // ── Player shooting ───────────────────────────────────────
@@ -342,26 +412,27 @@ export class Game {
     if (!this.#weapon.tryFire()) return;
 
     this.#bus.emit(GameEvents.PLAYER_SHOT, { weaponKey: this.#weapon.currentKey });
+    for (const bot of this.#bots) bot.ai.hearNoise(this.#arena.camera.position, 1);
 
     const cam = this.#arena.camera;
     const def = this.#weapon.currentDef;
     const count = def.bulletsPerShot || 1;
 
     for (let i = 0; i < count; i++) {
-      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+      const dir = this.#scratchDirection.set(0, 0, -1).applyQuaternion(cam.quaternion);
       const s = def.spread;
       dir.x += (Math.random() - 0.5) * s * 2;
       dir.y += (Math.random() - 0.5) * s * 2;
       dir.z += (Math.random() - 0.5) * s * 2;
       dir.normalize();
 
-      const origin = cam.position.clone().add(dir.clone().multiplyScalar(0.8));
+      const origin = this.#scratchOrigin.copy(cam.position).addScaledVector(dir, 0.8);
       this.#bullets.spawn(origin, dir, false, def);
     }
 
     if (this.#network) {
-      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
-      const origin = cam.position.clone().add(dir.clone().multiplyScalar(0.8));
+      const dir = this.#scratchDirection.set(0, 0, -1).applyQuaternion(cam.quaternion);
+      const origin = this.#scratchOrigin.copy(cam.position).addScaledVector(dir, 0.8);
       this.#network.sendShoot(origin, dir);
     }
   }
@@ -374,6 +445,7 @@ export class Game {
     const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
     const origin = cam.position.clone();
     if (this.#grenades.throw(origin, dir, this.#player.yaw, this.#player.pitch)) {
+      for (const bot of this.#bots) bot.ai.hearNoise(origin, 0.8);
       this.#hud.addKillFeed(`Grenade thrown (${this.#grenades.count} left)`);
     }
   }
@@ -415,7 +487,7 @@ export class Game {
     // Check bots
     for (const bot of this.#bots) {
       if (!bot.enemy.alive) continue;
-      const wp = new THREE.Vector3();
+      const wp = this.#scratchWorldPosition;
       bot.enemy.group.getWorldPosition(wp);
       wp.y = 1.0;
       if (!this.#bullets.testEnemyHit(bullet, wp)) continue;
@@ -442,7 +514,7 @@ export class Game {
         this.#hud.addKillFeed(`Enemy eliminated +${killScore}`);
         const hideMsg = this.#hud.showKillMessage();
         const botRef = bot;
-        setTimeout(() => { hideMsg(); this.#respawnBot(botRef); }, 2000);
+        this.#lifetime.timeout(() => { hideMsg(); this.#respawnBot(botRef); }, 2000);
       }
       return true;
     }
@@ -453,7 +525,7 @@ export class Game {
       // Skip friendly fire in team modes
       if (this.#teams.isFriendly(id, rp._team)) continue;
 
-      const wp = rp.position.clone();
+      const wp = this.#scratchWorldPosition.copy(rp.position);
       wp.y = 1.0;
       if (!this.#bullets.testEnemyHit(bullet, wp)) continue;
 
@@ -497,13 +569,18 @@ export class Game {
 
   #respawnBot(bot) {
     const diff = this.#difficulty.getProfile(this.#kills);
-    let pos;
-    do {
-      pos = new THREE.Vector3(
-        (Math.random() - 0.5) * (Config.arena.size - 10), 0,
-        (Math.random() - 0.5) * (Config.arena.size - 10),
-      );
-    } while (pos.distanceTo(this.#arena.camera.position) < 15);
+    const safeSpawns = this.#arena.playerSpawns.filter(spawn => {
+      const dx = spawn.x - this.#arena.camera.position.x;
+      const dz = spawn.z - this.#arena.camera.position.z;
+      return dx * dx + dz * dz >= 15 * 15;
+    });
+    const spawns = safeSpawns.length ? safeSpawns : this.#arena.playerSpawns;
+    const spawn = spawns[Math.floor(Math.random() * spawns.length)] || { x: 20, z: -20 };
+    const pos = new THREE.Vector3(
+      spawn.x,
+      this.#arena.getGroundHeight(spawn.x, spawn.z),
+      spawn.z,
+    );
 
     bot.enemy.spawn(pos, diff.enemyHP);
     bot.ai.reset();
@@ -524,7 +601,7 @@ export class Game {
     }
     this.#hud.addKillFeed(`Picked up ${pickup.def.name}`);
     this.#particles.spawn(
-      new THREE.Vector3(pickup.spot.x, 1, pickup.spot.z),
+      new THREE.Vector3(pickup.spot.x, this.#arena.getGroundHeight(pickup.spot.x, pickup.spot.z) + 1, pickup.spot.z),
       pickup.def.color, 10,
     );
     this.#bus.emit(GameEvents.PICKUP_COLLECTED, { type: pickup.type });
@@ -555,11 +632,11 @@ export class Game {
 
     if (this.#arena.playerSpawns.length) {
       const sp = this.#arena.playerSpawns[0];
-      this.#player.position.set(sp.x, Config.player.height, sp.z);
+      this.#player.position.set(sp.x, this.#arena.getGroundHeight(sp.x, sp.z) + Config.player.height, sp.z);
     }
 
     if (!this.#touch.active) {
-      this.#arena.renderer.domElement.requestPointerLock();
+      this.#requestPointerLock();
     }
   }
 
@@ -588,22 +665,43 @@ export class Game {
   // ── Destroy ───────────────────────────────────────────────
 
   destroy() {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
     cancelAnimationFrame(this.#animFrame);
-    this.#audio.stopAmbient();
+    this.#lifetime.dispose();
+    if (document.pointerLockElement === this.#arena.renderer.domElement) document.exitPointerLock?.();
     document.body.classList.remove('game-active');
     for (const unsub of this.#netUnsubs) unsub();
+    this.#netUnsubs.length = 0;
     for (const [, rp] of this.#remotePlayers) rp.destroy();
     this.#remotePlayers.clear();
-    this.#pickups.clearAll();
-    this.#bullets.clearAll();
-    this.#grenades.clearAll();
+    for (const bot of this.#bots) bot.enemy.destroy();
+    this.#bots.length = 0;
+    this.#player.destroy();
+    this.#weapon.destroy();
+    this.#pickups.dispose();
+    this.#bullets.dispose();
+    this.#particles.dispose();
+    this.#grenades.dispose();
     this.#teams.destroy();
+    this.#hud.destroy();
+    this.#ui.destroy();
+    this.#scoreboard.destroy();
+    this.#chat.destroy();
+    this.#touch.destroy();
+    void this.#audio.dispose();
+    const pointerError = document.getElementById('pointer-lock-error');
+    if (pointerError) pointerError.style.display = 'none';
+    this.#portraitTexture?.dispose();
+    this.#portraitTexture = null;
     this.#arena.destroy();
+    this.#bus.clear();
   }
 
   // ── Game loop ─────────────────────────────────────────────
 
   #loop() {
+    if (this.#destroyed) return;
     this.#animFrame = requestAnimationFrame(() => this.#loop());
 
     const now = performance.now();
@@ -623,11 +721,14 @@ export class Game {
       } else {
         this.#player.update(dt, speedMul);
       }
-      this.#physics.resolveCollision(this.#player.position, Config.player.radius);
+      const feetY = this.#player.position.y - this.#player.bodyHeight;
+      this.#physics.resolveCollision(this.#player.position, Config.player.radius, feetY, this.#player.bodyHeight);
+      this.#player.updateVertical(dt, this.#physics, this.#touch.active && this.#touch.wantsJump, this.#touch.active && this.#touch.crouching);
       this.#player.clampToBounds();
 
       // Weapon
       const reloadDone = this.#weapon.update(dt, now, this.#player.isMoving);
+      if (this.#primaryDown && this.#weapon.currentDef.automatic) this.#playerShoot();
       if (reloadDone) this.#bus.emit(GameEvents.PLAYER_RELOADED);
       if (this.#player.wantsReload() || this.#touch.wantsReload) this.#weapon.startReload();
 
@@ -647,10 +748,10 @@ export class Game {
       // Bot AI
       const diff = this.#difficulty.getProfile(this.#kills);
       for (const bot of this.#bots) {
-        const shots = bot.ai.update(dt, this.#arena.camera.position, diff);
+        const shots = bot.ai.update(dt, this.#arena.camera.position, diff, this.#bots);
         for (const dir of shots) {
-          const origin = new THREE.Vector3(bot.enemy.position.x, 1.5, bot.enemy.position.z);
-          this.#bullets.spawn(origin, dir, true);
+          this.#scratchOrigin.set(bot.enemy.position.x, bot.enemy.position.y + Config.enemy.ai.eyeHeight, bot.enemy.position.z);
+          this.#bullets.spawn(this.#scratchOrigin, dir, true);
         }
         bot.enemy.updateAnimation(now);
       }
@@ -675,7 +776,7 @@ export class Game {
           this.#hud.addKillFeed('Enemy eliminated by grenade +100');
           const hideMsg = this.#hud.showKillMessage();
           const botRef = hit.bot;
-          setTimeout(() => { hideMsg(); this.#respawnBot(botRef); }, 2000);
+          this.#lifetime.timeout(() => { hideMsg(); this.#respawnBot(botRef); }, 2000);
         }
       }
       for (const hit of grenadeResults.remoteHits) {
