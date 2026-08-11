@@ -10,6 +10,7 @@ import { Arena } from './world/Arena.js';
 import { Player } from './entities/Player.js';
 import { Weapon } from './entities/Weapon.js';
 import { Enemy } from './entities/Enemy.js';
+import { EnemyModelAssets } from './entities/EnemyModelAssets.js';
 import { RemotePlayer } from './entities/RemotePlayer.js';
 
 /** Seconds between outgoing player-state updates (20 Hz). */
@@ -61,6 +62,7 @@ export class Game {
   #difficulty = new DifficultyManager();
   #lifetime = new Lifetime();
   #portraitTexture = null;
+  #enemyAssets = null;
   #coverPoints = [];
   #navigationGraph;
   #destroyed = false;
@@ -68,6 +70,7 @@ export class Game {
   #scratchOrigin = new THREE.Vector3();
   #scratchDirection = new THREE.Vector3();
   #scratchWorldPosition = new THREE.Vector3();
+  #scratchPlayerPosition = new THREE.Vector3();
 
   // Bots
   #bots = [];
@@ -86,6 +89,7 @@ export class Game {
   #scoreboard;
   #chat;
   #touch;
+  #uiAccum = 0;
 
   // Session
   #locked    = false;
@@ -129,6 +133,7 @@ export class Game {
       this.#portraitTexture = new THREE.TextureLoader().load(config.botPortrait);
       this.#portraitTexture.colorSpace = THREE.SRGBColorSpace;
     }
+    this.#enemyAssets = new EnemyModelAssets(this.#portraitTexture);
     this.#coverPoints = extractCoverPoints(this.#arena.colliders);
 
     // Team / game mode setup
@@ -178,7 +183,7 @@ export class Game {
   #spawnBots(count) {
     const spawns = this.#arena.playerSpawns;
     for (let i = 0; i < count; i++) {
-      const enemy = new Enemy(this.#arena.scene, this.#portraitTexture);
+      const enemy = new Enemy(this.#arena.scene, this.#portraitTexture, this.#enemyAssets);
       const ai    = new EnemyAI(enemy, this.#physics);
       ai.setCoverPoints(this.#coverPoints);
       ai.setNavigationGraph(this.#navigationGraph);
@@ -452,9 +457,9 @@ export class Game {
 
   // ── Hit handling ──────────────────────────────────────────
 
-  #onPlayerHit(bullet, dt) {
+  #onPlayerHit(bullet) {
     if (this.#gameOver) return false;
-    if (!this.#bullets.testPlayerHit(bullet, this.#arena.camera.position, dt)) return false;
+    if (!this.#bullets.testPlayerHit(bullet, this.#arena.camera.position)) return false;
 
     const shieldMul = this.#pickups.getShieldMultiplier();
     const diff = this.#difficulty.getProfile(this.#kills);
@@ -677,6 +682,8 @@ export class Game {
     this.#remotePlayers.clear();
     for (const bot of this.#bots) bot.enemy.destroy();
     this.#bots.length = 0;
+    this.#enemyAssets?.dispose();
+    this.#enemyAssets = null;
     this.#player.destroy();
     this.#weapon.destroy();
     this.#pickups.dispose();
@@ -716,13 +723,21 @@ export class Game {
     if ((this.#locked || this.#touch.active) && !this.#gameOver) {
       // Player
       const speedMul = this.#pickups.getSpeedMultiplier();
+      this.#scratchPlayerPosition.copy(this.#player.position);
       if (this.#touch.active) {
         this.#player.updateFromTouch(dt, this.#touch.moveX, this.#touch.moveY, this.#touch.lookDX, this.#touch.lookDY, speedMul);
       } else {
         this.#player.update(dt, speedMul);
       }
+      const moveX = this.#player.position.x - this.#scratchPlayerPosition.x;
+      const moveZ = this.#player.position.z - this.#scratchPlayerPosition.z;
+      this.#player.position.x = this.#scratchPlayerPosition.x;
+      this.#player.position.z = this.#scratchPlayerPosition.z;
       const feetY = this.#player.position.y - this.#player.bodyHeight;
-      this.#physics.resolveCollision(this.#player.position, Config.player.radius, feetY, this.#player.bodyHeight);
+      this.#physics.moveWithCollisions(
+        this.#player.position, moveX, moveZ,
+        Config.player.radius, feetY, this.#player.bodyHeight,
+      );
       this.#player.updateVertical(dt, this.#physics, this.#touch.active && this.#touch.wantsJump, this.#touch.active && this.#touch.crouching);
       this.#player.clampToBounds();
 
@@ -834,52 +849,56 @@ export class Game {
         this.#particles.spawn(pos, 0xffaa44, Config.particles.wallHitCount);
         this.#bus.emit(GameEvents.BULLET_HIT_WALL);
       },
-      onPlayerHit: bullet => this.#onPlayerHit(bullet, dt),
+      onPlayerHit: bullet => this.#onPlayerHit(bullet),
       onEnemyHit:  bullet => this.#onEnemyHit(bullet),
     });
 
     this.#particles.update(dt);
 
-    // UI
-    const diff = this.#difficulty.getProfile(this.#kills);
-    const closestBot = this.#bots.length ? this.#bots.reduce((a, b) =>
-      a.enemy.position.distanceTo(this.#player.position) < b.enemy.position.distanceTo(this.#player.position) ? a : b
-    ) : null;
+    // DOM and 2D-canvas updates do not need render-frame frequency. The
+    // minimap walks every collider and used to compete with WebGL at 60 Hz.
+    this.#uiAccum += dt;
+    if (this.#uiAccum >= 0.1) {
+      this.#uiAccum %= 0.1;
+      const diff = this.#difficulty.getProfile(this.#kills);
+      const closestBot = this.#bots.length ? this.#bots.reduce((a, b) =>
+        a.enemy.position.distanceToSquared(this.#player.position) < b.enemy.position.distanceToSquared(this.#player.position) ? a : b
+      ) : null;
 
-    this.#hud.update({
-      playerHP: this.#player.hp,
-      ammo: this.#weapon.ammo,
-      reloading: this.#weapon.reloading,
-      enemyHP: closestBot?.enemy.hp ?? 0,
-      score: this.#score,
-      kills: this.#kills,
-      gameTime: this.#gameTime,
-      activeEffects: this.#pickups.activeEffects,
-      weaponName: this.#weapon.weaponName,
-      weaponIndex: this.#weapon.weaponIndex,
-      grenades: this.#grenades.count,
-      teamScores: this.#teams.isTeamMode() ? this.#teams.getTeamScores() : null,
-      gameMode: this.#teams.mode,
-    }, diff);
+      this.#hud.update({
+        playerHP: this.#player.hp,
+        ammo: this.#weapon.ammo,
+        reloading: this.#weapon.reloading,
+        enemyHP: closestBot?.enemy.hp ?? 0,
+        score: this.#score,
+        kills: this.#kills,
+        gameTime: this.#gameTime,
+        activeEffects: this.#pickups.activeEffects,
+        weaponName: this.#weapon.weaponName,
+        weaponIndex: this.#weapon.weaponIndex,
+        grenades: this.#grenades.count,
+        teamScores: this.#teams.isTeamMode() ? this.#teams.getTeamScores() : null,
+        gameMode: this.#teams.mode,
+      }, diff);
 
-    // Minimap
-    const enemyPositions = this.#bots
-      .filter(b => b.enemy.alive)
-      .map(b => ({ x: b.enemy.position.x, z: b.enemy.position.z, color: '#f44' }));
-    for (const [, rp] of this.#remotePlayers) {
-      if (rp.alive) enemyPositions.push({ x: rp.position.x, z: rp.position.z, color: '#' + rp.color.toString(16).padStart(6, '0') });
+      const enemyPositions = this.#bots
+        .filter(b => b.enemy.alive)
+        .map(b => ({ x: b.enemy.position.x, z: b.enemy.position.z, color: '#f44' }));
+      for (const [, rp] of this.#remotePlayers) {
+        if (rp.alive) enemyPositions.push({ x: rp.position.x, z: rp.position.z, color: '#' + rp.color.toString(16).padStart(6, '0') });
+      }
+
+      this.#minimap.draw(
+        this.#arena.colliders,
+        this.#player.position,
+        this.#player.yaw,
+        enemyPositions,
+        this.#pickups.getPickupPositions(),
+      );
+      this.#scoreboard.update(this.#getScoreboardData());
     }
 
-    this.#minimap.draw(
-      this.#arena.colliders,
-      this.#player.position,
-      this.#player.yaw,
-      enemyPositions,
-      this.#pickups.getPickupPositions(),
-    );
-
-    this.#scoreboard.update(this.#getScoreboardData());
-
+    this.#arena.updatePerformance(dt);
     this.#arena.render();
   }
 

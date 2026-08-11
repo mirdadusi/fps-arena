@@ -159,8 +159,18 @@ export class EnemyAI {
       const speedScale = this.state === 'dodge' ? ai.dodgeSpeedMultiplier
         : this.state === 'retreat' ? ai.retreatSpeedMultiplier
           : this.state === 'holdCover' ? 0 : 1;
-      enemyPos.addScaledVector(this.#moveDirection, diff.enemySpeed * speedScale * dt);
-      this.physics.resolveCollision(enemyPos, Config.enemy.radius, enemyPos.y, 2.15);
+      const distance = diff.enemySpeed * speedScale * dt;
+      const dx = this.#moveDirection.x * distance;
+      const dz = this.#moveDirection.z * distance;
+      if (this.physics.moveWithCollisions) {
+        this.physics.moveWithCollisions(enemyPos, dx, dz, Config.enemy.radius, enemyPos.y, 2.15);
+      } else {
+        // Lightweight physics doubles used by integrations may implement only
+        // the original endpoint API.
+        enemyPos.x += dx;
+        enemyPos.z += dz;
+        this.physics.resolveCollision(enemyPos, Config.enemy.radius, enemyPos.y, 2.15);
+      }
     }
 
     const bound = Config.arena.size / 2 - 1.5;
