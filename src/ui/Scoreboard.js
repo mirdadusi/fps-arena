@@ -4,10 +4,15 @@
 export class Scoreboard {
   #el   = document.getElementById('scoreboard');
   #body = document.getElementById('scoreboard-body');
+  #lifetime = new Lifetime();
 
   constructor() {
-    document.addEventListener('keydown', e => { if (e.code === 'Tab') { e.preventDefault(); this.show(); } });
-    document.addEventListener('keyup', e => { if (e.code === 'Tab') this.hide(); });
+    this.#lifetime.listen(document, 'keydown', e => {
+      if (e.code === 'Tab') { e.preventDefault(); this.show(); }
+    });
+    this.#lifetime.listen(document, 'keyup', e => {
+      if (e.code === 'Tab') this.hide();
+    });
   }
 
   show() { if (this.#el) this.#el.style.display = 'flex'; }
@@ -26,4 +31,10 @@ export class Scoreboard {
   }
 
   #esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  destroy() {
+    this.hide();
+    this.#lifetime.dispose();
+  }
 }
+import { Lifetime } from '../core/Lifetime.js';

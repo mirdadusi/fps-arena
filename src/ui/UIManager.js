@@ -1,3 +1,4 @@
+import { Lifetime } from '../core/Lifetime.js';
 import { PersistenceStore } from '../stores/PersistenceStore.js';
 
 /**
@@ -9,6 +10,7 @@ export class UIManager {
   #goStats        = document.getElementById('go-stats');
   #goPersonalBest = document.getElementById('go-personal-best');
   #goScoreTable   = document.getElementById('go-scoretable');
+  #lifetime       = new Lifetime();
 
   showBlocker()  { this.#blocker.style.display  = 'flex'; }
   hideBlocker()  { this.#blocker.style.display  = 'none'; }
@@ -62,6 +64,12 @@ export class UIManager {
   hideGameOver() { this.#gameOver.style.display = 'none'; }
 
   onGameOverClick(callback) {
-    this.#gameOver.addEventListener('click', callback);
+    this.#lifetime.listen(this.#gameOver, 'click', callback);
+  }
+
+  destroy() {
+    this.#lifetime.dispose();
+    this.hideGameOver();
+    this.hideBlocker();
   }
 }

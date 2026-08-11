@@ -19,7 +19,7 @@ export class Room {
     const isHost = this.players.size === 0 || playerId === this.hostId;
     this.players.set(playerId, {
       ws, name, color, isHost, team, skinIndex,
-      kills: 0, deaths: 0, score: 0,
+      kills: 0, deaths: 0, score: 0, hp: 100, lastDamagedBy: null,
     });
     return { color, isHost };
   }
@@ -49,7 +49,7 @@ export class Room {
   broadcast(msg, excludeId = null) {
     const data = JSON.stringify(msg);
     for (const [id, p] of this.players) {
-      if (id !== excludeId && p.ws.readyState === 1) p.ws.send(data);
+      if (id !== excludeId && p.ws?.readyState === 1) p.ws.send(data);
     }
   }
 

@@ -5,8 +5,8 @@ WebGL for rendering, plain WebSockets for multiplayer, no engine and no build
 framework beyond Vite.
 
 Single-player against bots, or up to 8 players across free-for-all, team
-deathmatch and capture-the-flag. Four weapons, grenades, pickups, four arena
-layouts. All geometry, audio and effects are generated in code — there are no
+deathmatch and capture-the-flag. Four weapons, grenades, pickups, and five
+maps. All geometry, audio and effects are generated in code — there are no
 texture, model or sound files in this repository.
 
 ## Run it
@@ -14,6 +14,7 @@ texture, model or sound files in this repository.
 ```bash
 npm install
 npm run build     # required — the server only serves dist/
+npm test          # unit, lifecycle, AI, reconnect, and WebSocket abuse tests
 npm start         # http://localhost:3000
 ```
 
@@ -47,6 +48,12 @@ The server serves `dist/` and nothing else, so `npm run build` must run first.
 Put a reverse proxy in front to terminate TLS and map `/ws` to the game
 server — the client connects to `wss://<your-host>/ws`, deriving both from the
 page's own origin, so no port needs to be hardcoded.
+
+The built server accepts both `/` and the canonical `/arena-fps/` path;
+`/arena-fps` redirects to the trailing-slash form so relative hashed assets do
+not resolve from the wrong directory. A CSP-compatible startup watchdog turns
+module failures into a visible error and reload action instead of an endless
+loading overlay.
 
 ## How multiplayer works
 
@@ -83,6 +90,39 @@ server/
 
 Rendering uses a shared geometry and pooled particles; audio is synthesised
 through the Web Audio API rather than loaded from files.
+
+Bots use short-term perception memory, predictive aim, tactical range control,
+cover scoring, obstacle avoidance, squad separation, and stuck recovery. A
+custom bot face photo can be uploaded in Settings; it is cropped locally and
+never sent to the server. Right mouse aims down sights and rifles support
+hold-to-fire.
+
+Village Survival is a separate procedural environment, so the four competitive
+arena layouts remain unchanged. It adds enterable houses and a barn, forest
+concealment, hills, rock cover, jumpable logs, a cave, and a crouch-only escape
+passage. `Space` jumps and `Ctrl`/`C` crouches; the same actions are available
+on touch devices. Bots use authored navigation links through doors and the cave,
+investigate gunfire without seeing through walls, and select hiding or ambush
+positions while searching.
+
+Transient multiplayer disconnects automatically retry with bounded backoff.
+The server holds the player's match slot briefly and resumes it with an opaque
+session token, instead of requiring a page reload.
+
+## Tests
+
+```bash
+npm test
+npm run test:coverage
+npm audit
+```
+
+The suite includes real repeated `Game` construction/teardown regressions for
+both arena and Village worlds, GPU and AudioContext disposal checks, vertical
+movement and tactical navigation tests, reconnect tests, and 14 WebSocket abuse
+tests against a live child server. See
+[`docs/architecture.md`](docs/architecture.md) for ownership boundaries and
+the remaining server-authority tradeoff.
 
 ## Licence
 

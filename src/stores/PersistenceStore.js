@@ -49,6 +49,19 @@ export const PersistenceStore = {
   getSkinIndex()        { return read('skinIndex', 0); },
   setSkinIndex(idx)     { write('skinIndex', Number(idx)); },
 
+  getBotPortrait() {
+    const value = read('botPortrait', null);
+    return typeof value === 'string' && value.startsWith('data:image/') ? value : null;
+  },
+  setBotPortrait(dataUrl) {
+    if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') && dataUrl.length < 750_000) {
+      write('botPortrait', dataUrl);
+    }
+  },
+  clearBotPortrait() {
+    try { localStorage.removeItem(PREFIX + 'botPortrait'); } catch { /* unavailable */ }
+  },
+
   // ── Settings ─────────────────────────────────────────────
 
   getSensitivity()      { return read('sensitivity', 1.0); },

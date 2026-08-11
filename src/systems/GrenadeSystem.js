@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
 
 /**
  * GrenadeSystem — throwable grenades with arc trajectory, bounce, and explosion.
@@ -11,6 +12,7 @@ export class GrenadeSystem {
   #physics;
   #geo = new THREE.SphereGeometry(0.12, 8, 8);
   #mat = new THREE.MeshStandardMaterial({ color: 0x446644, roughness: 0.5, metalness: 0.3 });
+  #worldPosition = new THREE.Vector3();
 
   count = Config.grenade.maxCount;
 
@@ -56,14 +58,15 @@ export class GrenadeSystem {
     for (let i = this.#grenades.length - 1; i >= 0; i--) {
       const g = this.#grenades[i];
       g.velocity.y -= Config.physics.gravity * dt;
-      g.mesh.position.add(g.velocity.clone().multiplyScalar(dt));
+      g.mesh.position.addScaledVector(g.velocity, dt);
       g.mesh.rotation.x += dt * 5;
       g.mesh.rotation.z += dt * 3;
       g.life -= dt;
 
-      // Bounce off floor
-      if (g.mesh.position.y <= 0.12) {
-        g.mesh.position.y = 0.12;
+      // Bounce off the rendered terrain, including Village hills.
+      const floor = this.#physics.groundHeightAt(g.mesh.position.x, g.mesh.position.z) + 0.12;
+      if (g.mesh.position.y <= floor) {
+        g.mesh.position.y = floor;
         g.velocity.y = Math.abs(g.velocity.y) * Config.grenade.bounceDecay;
         g.velocity.x *= 0.7;
         g.velocity.z *= 0.7;
@@ -90,6 +93,10 @@ export class GrenadeSystem {
       if (g.life <= 0) {
         this.#explode(g.mesh.position, playerPos, enemies, remotePlayers, results);
         this.#scene.remove(g.mesh);
+        // Ring geometry/material are per grenade; body resources are shared.
+        const ring = g.mesh.children.find(child => child.isMesh);
+        ring?.geometry?.dispose();
+        ring?.material?.dispose();
         this.#grenades.splice(i, 1);
       }
     }
@@ -105,6 +112,7 @@ export class GrenadeSystem {
       if (e.life <= 0) {
         this.#scene.remove(e.mesh);
         this.#scene.remove(e.light);
+        disposeObject3D(e.mesh);
         this.#explosions.splice(i, 1);
       }
     }
@@ -142,7 +150,7 @@ export class GrenadeSystem {
     // Damage enemies (bots)
     for (const bot of enemies) {
       if (!bot.enemy.alive) continue;
-      const wp = new THREE.Vector3();
+      const wp = this.#worldPosition;
       bot.enemy.group.getWorldPosition(wp);
       const dist = pos.distanceTo(wp);
       if (dist < radius) {
@@ -163,15 +171,27 @@ export class GrenadeSystem {
   }
 
   reset() {
-    for (const g of this.#grenades) this.#scene.remove(g.mesh);
+    for (const g of this.#grenades) {
+      this.#scene.remove(g.mesh);
+      const ring = g.mesh.children.find(child => child.isMesh);
+      ring?.geometry?.dispose();
+      ring?.material?.dispose();
+    }
     this.#grenades.length = 0;
     for (const e of this.#explosions) {
       this.#scene.remove(e.mesh);
       this.#scene.remove(e.light);
+      disposeObject3D(e.mesh);
     }
     this.#explosions.length = 0;
     this.count = Config.grenade.maxCount;
   }
 
   clearAll() { this.reset(); }
+
+  dispose() {
+    this.reset();
+    this.#geo.dispose();
+    this.#mat.dispose();
+  }
 }

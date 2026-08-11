@@ -26,6 +26,9 @@ export class DifficultyManager {
       burstCount: 1 + Math.min(tier, 3),
       coverChance:    DifficultyManager.#coverChance[tier],
       retreatEnabled: DifficultyManager.#retreatEnabled[tier],
+      reactionTime: d.reactionTimes[tier],
+      aimLead: d.aimLead[tier],
+      aggression: d.aggression[tier],
     };
   }
 

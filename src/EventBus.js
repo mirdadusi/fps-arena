@@ -26,6 +26,10 @@ export class EventBus {
   emit(event, data) {
     this.#listeners.get(event)?.forEach(cb => cb(data));
   }
+
+  clear() {
+    this.#listeners.clear();
+  }
 }
 
 /** Well-known event names — avoids magic strings throughout the codebase. */

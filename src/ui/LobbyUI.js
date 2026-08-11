@@ -109,6 +109,7 @@ export class LobbyUI {
       this.#startCallback?.({
         mode: 'single', arena, botCount, playerName: name,
         skinIndex: this.#skinIndices.sp,
+        botPortrait: PersistenceStore.getBotPortrait(),
       });
     });
 
@@ -192,6 +193,7 @@ export class LobbyUI {
         gameMode: msg.gameMode || 'ffa',
         team: msg.team || null,
         skinIndex: this.#skinIndices.cr || this.#skinIndices.jr || 0,
+        botPortrait: PersistenceStore.getBotPortrait(),
       });
     });
   }
@@ -310,6 +312,18 @@ export class LobbyUI {
         <input type="range" id="settings-vol" min="0" max="1" step="0.01"
           value="${PersistenceStore.getVolume()}">
       </div>
+      <div class="lobby-field">
+        <label>Bot Face Photo</label>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <img id="bot-portrait-preview" alt="Bot face preview"
+            style="width:64px;height:64px;object-fit:cover;border:1px solid #555;border-radius:6px;background:#111;display:none;">
+          <div style="flex:1;">
+            <input id="settings-bot-portrait" type="file" accept="image/png,image/jpeg,image/webp" style="max-width:100%;color:#aaa;">
+            <button id="settings-bot-portrait-clear" class="lobby-btn secondary" type="button" style="padding:6px;margin-top:8px;font-size:11px;">Use robot head</button>
+          </div>
+        </div>
+        <div id="bot-portrait-status" style="font-size:11px;color:#888;margin-top:6px;">Photos stay in this browser and are cropped to 256×256.</div>
+      </div>
       <button id="settings-close" class="lobby-btn" style="margin-top:16px;width:100%;">Close</button>
     `;
 
@@ -319,6 +333,14 @@ export class LobbyUI {
     const sensInput = panel.querySelector('#settings-sens');
     const fovInput  = panel.querySelector('#settings-fov');
     const volInput  = panel.querySelector('#settings-vol');
+    const portraitInput = panel.querySelector('#settings-bot-portrait');
+    const portraitPreview = panel.querySelector('#bot-portrait-preview');
+    const portraitStatus = panel.querySelector('#bot-portrait-status');
+    const savedPortrait = PersistenceStore.getBotPortrait();
+    if (savedPortrait) {
+      portraitPreview.src = savedPortrait;
+      portraitPreview.style.display = 'block';
+    }
 
     sensInput.addEventListener('input', () => {
       const v = parseFloat(sensInput.value);
@@ -334,8 +356,30 @@ export class LobbyUI {
       const v = parseFloat(volInput.value);
       panel.querySelector('#vol-val').textContent = `${Math.round(v * 100)}%`;
       PersistenceStore.setVolume(v);
-      // Also sync to AudioSystem volume key used by AudioSystem constructor
-      localStorage.setItem('fps-arena-volume', String(v));
+    });
+
+    portraitInput.addEventListener('change', async () => {
+      const file = portraitInput.files?.[0];
+      if (!file) return;
+      portraitStatus.textContent = 'Processing photo…';
+      try {
+        const dataUrl = await this.#processPortraitFile(file);
+        PersistenceStore.setBotPortrait(dataUrl);
+        portraitPreview.src = dataUrl;
+        portraitPreview.style.display = 'block';
+        portraitStatus.textContent = 'Saved. New bots will use this face.';
+      } catch (error) {
+        portraitStatus.textContent = error.message;
+      } finally {
+        portraitInput.value = '';
+      }
+    });
+
+    panel.querySelector('#settings-bot-portrait-clear').addEventListener('click', () => {
+      PersistenceStore.clearBotPortrait();
+      portraitPreview.removeAttribute('src');
+      portraitPreview.style.display = 'none';
+      portraitStatus.textContent = 'Robot head restored.';
     });
 
     panel.querySelector('#settings-close').addEventListener('click', () => {
@@ -348,6 +392,31 @@ export class LobbyUI {
       openBtn.addEventListener('click', () => {
         overlay.style.display = 'flex';
       });
+    }
+  }
+
+  async #processPortraitFile(file) {
+    if (!file.type.startsWith('image/')) throw new Error('Choose a PNG, JPEG, or WebP image.');
+    if (file.size > 5 * 1024 * 1024) throw new Error('Photo must be smaller than 5 MB.');
+
+    const url = URL.createObjectURL(file);
+    try {
+      const image = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('The selected image could not be decoded.'));
+        img.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      const side = Math.min(image.naturalWidth, image.naturalHeight);
+      const sx = (image.naturalWidth - side) / 2;
+      const sy = (image.naturalHeight - side) / 2;
+      ctx.drawImage(image, sx, sy, side, side, 0, 0, 256, 256);
+      return canvas.toDataURL('image/jpeg', 0.82);
+    } finally {
+      URL.revokeObjectURL(url);
     }
   }
 }

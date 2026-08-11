@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
 
 /**
  * Enemy — visual mech-soldier model, health, and animation state.
@@ -20,9 +21,12 @@ export class Enemy {
   #chestGlow;
   #eyeGlow;
   #auraLight;
+  #portraitTexture;
+  #destroyed = false;
 
-  constructor(scene) {
+  constructor(scene, portraitTexture = null) {
     this.scene = scene;
+    this.#portraitTexture = portraitTexture;
     this.hp = Config.enemy.maxHP;
     this.#build();
     this.group.position.set(20, 0, -20);
@@ -122,19 +126,31 @@ export class Enemy {
     crest.position.set(0, 2.1, 0);
     this.group.add(crest);
 
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.06), glowRed);
-    visor.position.set(0, 1.88, -0.26);
-    this.group.add(visor);
+    if (this.#portraitTexture) {
+      const portrait = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.38, 0.32),
+        new THREE.MeshBasicMaterial({ map: this.#portraitTexture, toneMapped: false }),
+      );
+      portrait.position.set(0, 1.86, -0.256);
+      this.group.add(portrait);
+    } else {
+      const visor = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.06), glowRed);
+      visor.position.set(0, 1.88, -0.26);
+      this.group.add(visor);
+    }
 
     this.#eyeGlow = new THREE.PointLight(0xff2200, 4, 5);
     this.#eyeGlow.position.set(0, 1.88, -0.3);
     this.group.add(this.#eyeGlow);
 
-    [-0.1, 0.1].forEach(x => {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), new THREE.MeshBasicMaterial({ color: 0xff4400 }));
-      eye.position.set(x, 1.88, -0.28);
-      this.group.add(eye);
-    });
+    if (!this.#portraitTexture) {
+      const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xff4400 });
+      [-0.1, 0.1].forEach(x => {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMaterial);
+        eye.position.set(x, 1.88, -0.28);
+        this.group.add(eye);
+      });
+    }
 
     const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, 0.15), armorMat);
     jaw.position.set(0, 1.68, -0.18);
@@ -257,5 +273,14 @@ export class Enemy {
       spine.position.set(0, 0.7 + i * 0.28, 0.3);
       this.group.add(spine);
     }
+  }
+
+  destroy() {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    this.scene.remove(this.group);
+    // The portrait texture is shared by all bots and owned by Game.
+    disposeObject3D(this.group, { disposeTextures: false });
+    this.group.clear();
   }
 }

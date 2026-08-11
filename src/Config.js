@@ -7,8 +7,12 @@ export const Config = Object.freeze({
 
   player: {
     height: 1.7,
+    crouchHeight: 1.05,
     speed: 8,
     sprintMultiplier: 1.6,
+    crouchMultiplier: 0.58,
+    jumpVelocity: 8.2,
+    stanceResponse: 14,
     radius: 0.4,
     maxHP: 100,
   },
@@ -29,24 +33,28 @@ export const Config = Object.freeze({
       bulletSpeed: 80, bulletDamage: 12, fireRate: 0.12,
       maxAmmo: 30, reloadTime: 1.8, spread: 0.015,
       bulletsPerShot: 1, bulletColor: 0xffcc00,
+      recoil: 10, automatic: true, adsFovMultiplier: 0.78,
     },
     shotgun: {
       name: 'Shotgun', key: 1,
       bulletSpeed: 60, bulletDamage: 8, fireRate: 0.7,
       maxAmmo: 8, reloadTime: 2.2, spread: 0.08,
       bulletsPerShot: 6, bulletColor: 0xff8844,
+      recoil: 19, automatic: false, adsFovMultiplier: 0.82,
     },
     sniper: {
       name: 'Sniper Rifle', key: 2,
       bulletSpeed: 150, bulletDamage: 55, fireRate: 1.2,
       maxAmmo: 5, reloadTime: 2.8, spread: 0.003,
       bulletsPerShot: 1, bulletColor: 0x44ccff,
+      recoil: 16, automatic: false, adsFovMultiplier: 0.52,
     },
     rocket: {
       name: 'Rocket Launcher', key: 3,
       bulletSpeed: 40, bulletDamage: 80, fireRate: 1.5,
       maxAmmo: 4, reloadTime: 3.0, spread: 0.01,
       bulletsPerShot: 1, bulletColor: 0xff4444, explosive: true, explosionRadius: 5,
+      recoil: 22, automatic: false, adsFovMultiplier: 0.8,
     },
   },
 
@@ -57,6 +65,12 @@ export const Config = Object.freeze({
     damage: 60,
     radius: 6,
     bounceDecay: 0.4,
+  },
+
+  weaponFeel: {
+    recoilSpring: 72,
+    recoilDamping: 15,
+    aimResponse: 14,
   },
 
   skins: [
@@ -77,6 +91,10 @@ export const Config = Object.freeze({
     respawnDelay: 3,
   },
 
+  network: {
+    reconnectDelays: [500, 1000, 2000, 4000, 8000, 10000],
+  },
+
   enemy: {
     maxHP: 150,
     speedBase: 7,
@@ -89,6 +107,49 @@ export const Config = Object.freeze({
     hitHalfHeight: 1.3,
     retreatHPThreshold: 30,
     coverSeekRadius: 20,
+    ai: {
+      eyeHeight: 1.5,
+      decisionMin: 0.25,
+      decisionMax: 0.55,
+      sightMemory: 3.0,
+      underFireMemory: 2.0,
+      optimalRangeMin: 10,
+      optimalRangeMax: 20,
+      closeRange: 6,
+      farRange: 27,
+      maxTrackedPlayerSpeed: 18,
+      maxPredictionTime: 0.35,
+      turnRateBase: 6,
+      turnRatePerTier: 1.5,
+      dodgeSpeedMultiplier: 1.45,
+      retreatSpeedMultiplier: 1.15,
+      separationRadius: 2.4,
+      separationWeight: 0.8,
+      avoidanceProbe: 1.5,
+      coverArrivalRadius: 1.4,
+      searchArrivalRadius: 1.5,
+      exposedCoverPenalty: 180,
+      coverDistanceWeight: 0.04,
+      stuckDistance: 0.025,
+      stuckTime: 0.45,
+      burstSpacing: 0.09,
+      fireRateJitter: 0.18,
+      coverFireRateMultiplier: 1.35,
+      patrolInset: 4,
+      patrolDuration: 2.8,
+      pursueDuration: 1.6,
+      strafeDuration: 1.8,
+      flankDuration: 2.2,
+      dodgeDuration: 0.55,
+      retreatDuration: 2.4,
+      coverTravelDuration: 2.8,
+      coverHoldDuration: 1.3,
+      huntDuration: 2.0,
+      investigateDuration: 3.4,
+      ambushDuration: 2.6,
+      hearingRange: 35,
+      routeArrivalRadius: 1.1,
+    },
   },
 
   physics: {
@@ -108,6 +169,9 @@ export const Config = Object.freeze({
     dodgePerTier: 0.06,
     minFireRate: 0.18,
     minAccuracy: 0.06,
+    reactionTimes: [0.34, 0.27, 0.21, 0.15, 0.1],
+    aimLead: [0.35, 0.5, 0.65, 0.82, 0.95],
+    aggression: [0.35, 0.5, 0.62, 0.78, 0.9],
   },
 
   rendering: {

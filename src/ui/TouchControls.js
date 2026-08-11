@@ -1,3 +1,5 @@
+import { Lifetime } from '../core/Lifetime.js';
+
 /**
  * TouchControls — virtual joystick and buttons for mobile play.
  * Auto-detects touch devices and shows/hides UI accordingly.
@@ -16,12 +18,15 @@ export class TouchControls {
   shooting = false;
   wantsReload = false;
   wantsGrenade = false;
+  wantsJump = false;
+  crouching = false;
   weaponSwitch = -1; // -1 = none
 
   #moveOrigin = null;
   #moveTouch = null;
   #lookTouch = null;
   #lookPrev = null;
+  #lifetime = new Lifetime();
 
   constructor() {
     this.#el = document.getElementById('touch-controls');
@@ -46,14 +51,14 @@ export class TouchControls {
     const lookZone = document.getElementById('touch-look-zone');
 
     // Move joystick
-    moveZone?.addEventListener('touchstart', e => {
+    this.#lifetime.listen(moveZone, 'touchstart', e => {
       e.preventDefault();
       const t = e.changedTouches[0];
       this.#moveTouch = t.identifier;
       this.#moveOrigin = { x: t.clientX, y: t.clientY };
     }, { passive: false });
 
-    moveZone?.addEventListener('touchmove', e => {
+    this.#lifetime.listen(moveZone, 'touchmove', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
         if (t.identifier === this.#moveTouch && this.#moveOrigin) {
@@ -86,11 +91,11 @@ export class TouchControls {
         }
       }
     };
-    moveZone?.addEventListener('touchend', endMove);
-    moveZone?.addEventListener('touchcancel', endMove);
+    this.#lifetime.listen(moveZone, 'touchend', endMove);
+    this.#lifetime.listen(moveZone, 'touchcancel', endMove);
 
     // Look area (right side)
-    lookZone?.addEventListener('touchstart', e => {
+    this.#lifetime.listen(lookZone, 'touchstart', e => {
       e.preventDefault();
       const t = e.changedTouches[0];
       this.#lookTouch = t.identifier;
@@ -98,7 +103,7 @@ export class TouchControls {
       this.shooting = true;
     }, { passive: false });
 
-    lookZone?.addEventListener('touchmove', e => {
+    this.#lifetime.listen(lookZone, 'touchmove', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
         if (t.identifier === this.#lookTouch && this.#lookPrev) {
@@ -120,24 +125,34 @@ export class TouchControls {
         }
       }
     };
-    lookZone?.addEventListener('touchend', endLook);
-    lookZone?.addEventListener('touchcancel', endLook);
+    this.#lifetime.listen(lookZone, 'touchend', endLook);
+    this.#lifetime.listen(lookZone, 'touchcancel', endLook);
 
     // Action buttons
-    document.getElementById('touch-btn-reload')?.addEventListener('touchstart', e => {
+    this.#lifetime.listen(document.getElementById('touch-btn-reload'), 'touchstart', e => {
       e.preventDefault(); this.wantsReload = true;
     });
-    document.getElementById('touch-btn-reload')?.addEventListener('touchend', () => { this.wantsReload = false; });
+    this.#lifetime.listen(document.getElementById('touch-btn-reload'), 'touchend', () => { this.wantsReload = false; });
 
-    document.getElementById('touch-btn-grenade')?.addEventListener('touchstart', e => {
+    this.#lifetime.listen(document.getElementById('touch-btn-grenade'), 'touchstart', e => {
       e.preventDefault(); this.wantsGrenade = true;
     });
-    document.getElementById('touch-btn-grenade')?.addEventListener('touchend', () => { this.wantsGrenade = false; });
+    this.#lifetime.listen(document.getElementById('touch-btn-grenade'), 'touchend', () => { this.wantsGrenade = false; });
+
+    this.#lifetime.listen(document.getElementById('touch-btn-jump'), 'touchstart', e => {
+      e.preventDefault(); this.wantsJump = true;
+    });
+    this.#lifetime.listen(document.getElementById('touch-btn-jump'), 'touchend', () => { this.wantsJump = false; });
+
+    this.#lifetime.listen(document.getElementById('touch-btn-crouch'), 'touchstart', e => {
+      e.preventDefault(); this.crouching = true;
+    });
+    this.#lifetime.listen(document.getElementById('touch-btn-crouch'), 'touchend', () => { this.crouching = false; });
 
     // Weapon switch buttons
     for (let i = 0; i < 4; i++) {
       const btn = document.getElementById(`touch-btn-w${i}`);
-      btn?.addEventListener('touchstart', e => {
+      this.#lifetime.listen(btn, 'touchstart', e => {
         e.preventDefault();
         this.weaponSwitch = i;
       });
@@ -154,5 +169,13 @@ export class TouchControls {
       return ws;
     }
     return -1;
+  }
+
+  destroy() {
+    this.#lifetime.dispose();
+    this.#el?.style.setProperty('display', 'none');
+    document.body.classList.remove('is-touch');
+    this.moveX = this.moveY = this.lookDX = this.lookDY = 0;
+    this.shooting = this.wantsReload = this.wantsGrenade = this.wantsJump = this.crouching = false;
   }
 }

@@ -3,8 +3,10 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, extname, sep } from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { WebSocketServer } from 'ws';
 import { Room } from './Room.js';
+import { normalizePublicPath } from './StaticRouter.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT = join(__dirname, '..');
@@ -37,7 +39,16 @@ let missingBuildWarned = false;
 // ── Static file server ──────────────────────────────────────
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const filePath = join(ROOT, url.pathname === '/' ? 'index.html' : url.pathname);
+  // The public/canonical URL uses /arena-fps. Support it alongside root and
+  // force the trailing slash so Vite's relative ./assets URLs resolve inside
+  // the subdirectory instead of incorrectly resolving from the host root.
+  const route = normalizePublicPath(url.pathname, url.search);
+  if (route.redirect) {
+    res.writeHead(308, { Location: route.redirect });
+    res.end();
+    return;
+  }
+  const filePath = join(ROOT, route.pathname === '/' ? 'index.html' : route.pathname);
 
   // join() normalises away ../ segments, so anything that escapes dist/ is
   // rejected here rather than reaching the filesystem.
@@ -47,9 +58,11 @@ const httpServer = createServer(async (req, res) => {
 
   try {
     const data = await readFile(filePath);
+    const shortLived = filePath.endsWith('index.html') || filePath.endsWith('startup-watchdog.js');
     res.writeHead(200, {
       'Content-Type': MIME[extname(filePath)] || 'application/octet-stream',
       'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': shortLived ? 'no-cache' : 'public, max-age=31536000, immutable',
     });
     res.end(data);
   } catch {
@@ -86,6 +99,8 @@ const MAX_MESSAGES_PER_SEC = parseInt(process.env.MAX_MESSAGES_PER_SEC || '80', 
 /** Damage is client-reported, so cap it at more than any weapon can deal. */
 const MAX_DAMAGE = 100;
 const MIN_MS_BETWEEN_HITS = 40;
+const RECONNECT_GRACE_MS = parseInt(process.env.RECONNECT_GRACE_MS || '20000', 10);
+const sessions = new Map();
 
 function genId(prefix) { return `${prefix}_${++playerCounter}_${Date.now().toString(36)}`; }
 
@@ -95,6 +110,8 @@ function genId(prefix) { return `${prefix}_${++playerCounter}_${Date.now().toStr
  * unvalidated team string reached innerHTML in the lobby list.
  */
 const TEAMS = new Set(['red', 'blue']);
+const GAME_MODES = new Set(['ffa', 'tdm', 'ctf']);
+const ARENAS = new Set(['classic', 'warehouse', 'colosseum', 'fortress', 'village']);
 const SKIN_COUNT = 8;
 
 function cleanTeam(value, fallback = 'red') {
@@ -106,14 +123,44 @@ function cleanSkin(value) {
   return Number.isInteger(n) && n >= 0 && n < SKIN_COUNT ? n : 0;
 }
 
+function cleanMode(value) { return GAME_MODES.has(value) ? value : 'ffa'; }
+function cleanArena(value) { return ARENAS.has(value) ? value : 'classic'; }
+
+function cleanVector(value, maxMagnitude = 100) {
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.x !== 'number' || typeof value.y !== 'number' || typeof value.z !== 'number') return null;
+  const { x, y, z } = value;
+  if (![x, y, z].every(Number.isFinite)) return null;
+  if (Math.abs(x) > maxMagnitude || Math.abs(y) > maxMagnitude || Math.abs(z) > maxMagnitude) return null;
+  return { x, y, z };
+}
+
+function cleanRotation(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.x !== 'number' || typeof value.y !== 'number') return null;
+  const { x, y } = value;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (Math.abs(x) > Math.PI || Math.abs(y) > Math.PI * 4) return null;
+  return { x, y };
+}
+
 wss.on('connection', (ws) => {
   if (wss.clients.size > MAX_CONNECTIONS) {
     ws.close(1013, 'Server full');
     return;
   }
 
-  const playerId = genId('p');
+  let playerId = genId('p');
   let currentRoomId = null;
+  let sessionToken = randomUUID();
+  let session = {
+    token: sessionToken,
+    playerId,
+    roomId: null,
+    ws,
+    cleanupTimer: null,
+  };
+  sessions.set(sessionToken, session);
 
   // Sliding one-second budget. A client that floods is disconnected rather
   // than throttled: at this rate it is broken or hostile, not slow.
@@ -131,7 +178,7 @@ wss.on('connection', (ws) => {
     ws.ping();
   }, 30000);
 
-  ws.send(JSON.stringify({ type: 'WELCOME', playerId }));
+  ws.send(JSON.stringify({ type: 'WELCOME', playerId, sessionToken }));
 
   ws.on('message', (raw) => {
     const now = Date.now();
@@ -147,23 +194,64 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
 
+      case 'RESUME_SESSION': {
+        const prior = sessions.get(String(msg.sessionToken || ''));
+        if (!prior || prior === session) {
+          ws.send(JSON.stringify({ type: 'RESUME_FAILED', message: 'Session expired' }));
+          break;
+        }
+
+        const priorRoom = prior.roomId ? rooms.get(prior.roomId) : null;
+        const priorPlayer = priorRoom?.players.get(prior.playerId);
+        if (prior.roomId && !priorPlayer) {
+          sessions.delete(prior.token);
+          ws.send(JSON.stringify({ type: 'RESUME_FAILED', message: 'Match no longer available' }));
+          break;
+        }
+
+        if (prior.cleanupTimer) clearTimeout(prior.cleanupTimer);
+        prior.ws?.close(1000, 'Session resumed elsewhere');
+        sessions.delete(sessionToken); // discard this socket's temporary session
+
+        session = prior;
+        session.ws = ws;
+        session.cleanupTimer = null;
+        sessionToken = prior.token;
+        playerId = prior.playerId;
+        currentRoomId = prior.roomId;
+        if (priorPlayer) priorPlayer.ws = ws;
+
+        ws.send(JSON.stringify({
+          type: 'SESSION_RESUMED',
+          sessionToken,
+          playerId,
+          roomId: currentRoomId,
+          gameStarted: !!priorRoom?.started,
+          players: priorRoom?.getPlayerList() || [],
+        }));
+        priorRoom?.broadcast({ type: 'PLAYER_RECONNECTED', playerId }, playerId);
+        break;
+      }
+
       case 'CREATE_ROOM': {
         if (rooms.size >= MAX_ROOMS) {
           ws.send(JSON.stringify({ type: 'ERROR', message: 'Server is at capacity.' }));
           break;
         }
         const roomId = genId('r');
+        const gameMode = cleanMode(msg.gameMode);
         const room = new Room(roomId,
           String(msg.name || 'Arena').slice(0, 24),
-          String(msg.arena || 'classic'),
+          cleanArena(msg.arena),
           Math.min(Math.max(parseInt(msg.maxPlayers) || 4, 2), 8),
           Math.min(Math.max(parseInt(msg.botCount) || 0, 0), 5),
           playerId,
-          String(msg.gameMode || 'ffa'));
-        const team = msg.gameMode === 'ffa' ? null : cleanTeam(msg.team);
+          gameMode);
+        const team = gameMode === 'ffa' ? null : cleanTeam(msg.team);
         room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, cleanSkin(msg.skinIndex));
         rooms.set(roomId, room);
         currentRoomId = roomId;
+        session.roomId = roomId;
         ws.send(JSON.stringify({
           type: 'ROOM_CREATED', roomId, roomName: room.name,
           players: room.getPlayerList(), gameMode: room.gameMode,
@@ -187,6 +275,7 @@ wss.on('connection', (ws) => {
         const team = room.gameMode === 'ffa' ? null : cleanTeam(msg.team, room.getAutoTeam());
         const { color, isHost } = room.addPlayer(playerId, ws, String(msg.playerName || 'Player').slice(0, 16), team, cleanSkin(msg.skinIndex));
         currentRoomId = msg.roomId;
+        session.roomId = msg.roomId;
         ws.send(JSON.stringify({
           type: 'JOINED', roomId: room.id, roomName: room.name,
           playerId, isHost, players: room.getPlayerList(),
@@ -215,13 +304,17 @@ wss.on('connection', (ws) => {
 
       case 'PLAYER_STATE': {
         const room = rooms.get(currentRoomId);
-        if (room) room.broadcast({ type: 'PLAYER_STATE', playerId, position: msg.position, rotation: msg.rotation }, playerId);
+        const position = cleanVector(msg.position, 100);
+        const rotation = cleanRotation(msg.rotation);
+        if (room && position && rotation) room.broadcast({ type: 'PLAYER_STATE', playerId, position, rotation }, playerId);
         break;
       }
 
       case 'SHOOT': {
         const room = rooms.get(currentRoomId);
-        if (room) room.broadcast({ type: 'PLAYER_SHOOT', playerId, origin: msg.origin, direction: msg.direction }, playerId);
+        const origin = cleanVector(msg.origin, 100);
+        const direction = cleanVector(msg.direction, 2);
+        if (room && origin && direction) room.broadcast({ type: 'PLAYER_SHOOT', playerId, origin, direction }, playerId);
         break;
       }
 
@@ -238,14 +331,18 @@ wss.on('connection', (ws) => {
         if (now - lastHitAt < MIN_MS_BETWEEN_HITS) break;
         lastHitAt = now;
 
-        const damage = Number(msg.damage);
+        const damage = msg.damage;
         if (!Number.isFinite(damage) || damage <= 0) break;
 
+        const appliedDamage = Math.min(damage, MAX_DAMAGE);
+        const target = room.players.get(msg.targetId);
+        target.hp = Math.max(0, target.hp - appliedDamage);
+        target.lastDamagedBy = playerId;
         room.broadcast({
           type: 'PLAYER_HIT',
           attackerId: playerId,
           targetId: msg.targetId,
-          damage: Math.min(damage, MAX_DAMAGE),
+          damage: appliedDamage,
         });
         break;
       }
@@ -264,9 +361,12 @@ wss.on('connection', (ws) => {
         const attacker = room.players.get(playerId);
         const target = room.players.get(msg.targetId);
         if (!attacker || !target || msg.targetId === playerId) break;
+        if (target.hp > 0 || target.lastDamagedBy !== playerId) break;
 
         attacker.kills++;
         target.deaths++;
+        target.hp = 100;
+        target.lastDamagedBy = null;
         room.broadcast({ type: 'PLAYER_KILLED', killerId: playerId, targetId: msg.targetId, players: room.getPlayerList() });
         break;
       }
@@ -289,13 +389,18 @@ wss.on('connection', (ws) => {
 
       case 'WEAPON_SWITCH': {
         const room = rooms.get(currentRoomId);
-        if (room) room.broadcast({ type: 'WEAPON_SWITCH', playerId, weaponIndex: msg.weaponIndex }, playerId);
+        const weaponIndex = Number.parseInt(msg.weaponIndex, 10);
+        if (room && Number.isInteger(weaponIndex) && weaponIndex >= 0 && weaponIndex <= 3) {
+          room.broadcast({ type: 'WEAPON_SWITCH', playerId, weaponIndex }, playerId);
+        }
         break;
       }
 
       case 'GRENADE_THROW': {
         const room = rooms.get(currentRoomId);
-        if (room) room.broadcast({ type: 'GRENADE_THROW', playerId, origin: msg.origin, direction: msg.direction }, playerId);
+        const origin = cleanVector(msg.origin, 100);
+        const direction = cleanVector(msg.direction, 2);
+        if (room && origin && direction) room.broadcast({ type: 'GRENADE_THROW', playerId, origin, direction }, playerId);
         break;
       }
     }
@@ -310,17 +415,32 @@ wss.on('connection', (ws) => {
       if (room.isEmpty()) rooms.delete(currentRoomId);
     }
     currentRoomId = null;
+    session.roomId = null;
   }
 
   ws.on('close', () => {
     clearInterval(heartbeat);
-    leaveCurrentRoom();
+    if (session.ws !== ws) return;
+    session.ws = null;
+    const room = currentRoomId ? rooms.get(currentRoomId) : null;
+    const player = room?.players.get(playerId);
+    if (room?.started && player) {
+      player.ws = null;
+      room.broadcast({ type: 'PLAYER_DISCONNECTED', playerId, graceMs: RECONNECT_GRACE_MS }, playerId);
+      session.cleanupTimer = setTimeout(() => {
+        if (session.ws) return;
+        leaveCurrentRoom();
+        sessions.delete(session.token);
+      }, RECONNECT_GRACE_MS);
+    } else {
+      leaveCurrentRoom();
+      sessions.delete(session.token);
+    }
   });
 
   // Without this an unhandled socket error would take the process down.
   ws.on('error', () => {
     clearInterval(heartbeat);
-    leaveCurrentRoom();
   });
 });
 

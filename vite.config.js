@@ -22,4 +22,21 @@ export default defineConfig({
   optimizeDeps: {
     include: ['three'],
   },
+  test: {
+    include: ['tests/**/*.test.js'],
+    testTimeout: 8000,
+    hookTimeout: 10000,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      include: ['src/**/*.js', 'server/**/*.js'],
+      exclude: ['src/main.js'],
+      thresholds: {
+        statements: 35,
+        branches: 20,
+        functions: 35,
+        lines: 38,
+      },
+    },
+  },
 });

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { disposeObject3D } from '../rendering/disposeObject3D.js';
 
 const PICKUP_DEFS = {
   health: { name: 'Health Pack', color: 0x44ff44, glow: 0x00ff00, value: 50, respawn: 15, duration: 0, css: '#4f4' },
@@ -19,8 +20,9 @@ export class PickupSystem {
   #pickups = [];
   #activeEffects = [];
 
-  constructor(scene) {
+  constructor(scene, groundHeightAt = () => 0) {
     this.#scene = scene;
+    this.groundHeightAt = groundHeightAt;
   }
 
   get activeEffects() { return this.#activeEffects; }
@@ -37,7 +39,8 @@ export class PickupSystem {
       if (!def) return;
 
       const group = new THREE.Group();
-      group.position.set(spot.x, 0.8, spot.z);
+      const baseY = this.groundHeightAt(spot.x, spot.z) + 0.8;
+      group.position.set(spot.x, baseY, spot.z);
 
       const mesh = this.#createMesh(spot.type, def);
       group.add(mesh);
@@ -55,7 +58,7 @@ export class PickupSystem {
       group.add(ring);
 
       this.#scene.add(group);
-      this.#pickups.push({ id: i, type: spot.type, def, group, mesh, light, ring, active: true, respawnTimer: 0, spot });
+      this.#pickups.push({ id: i, type: spot.type, def, group, mesh, light, ring, baseY, active: true, respawnTimer: 0, spot });
     });
   }
 
@@ -92,7 +95,7 @@ export class PickupSystem {
     for (const p of this.#pickups) {
       if (p.active) {
         p.group.rotation.y = now * 1.5;
-        p.group.position.y = 0.8 + Math.sin(now * 2 + p.id) * 0.15;
+        p.group.position.y = p.baseY + Math.sin(now * 2 + p.id) * 0.15;
         p.light.intensity = 2.5 + Math.sin(now * 3 + p.id * 0.7);
         p.ring.material.opacity = 0.3 + Math.sin(now * 2 + p.id) * 0.15;
 
@@ -137,8 +140,11 @@ export class PickupSystem {
     }));
   }
 
-  clearAll() {
-    for (const p of this.#pickups) this.#scene.remove(p.group);
+  clearAll({ dispose = true } = {}) {
+    for (const p of this.#pickups) {
+      this.#scene.remove(p.group);
+      if (dispose) disposeObject3D(p.group);
+    }
     this.#pickups = [];
     this.#activeEffects = [];
   }
@@ -147,4 +153,6 @@ export class PickupSystem {
     for (const p of this.#pickups) { p.active = true; p.group.visible = true; p.respawnTimer = 0; }
     this.#activeEffects = [];
   }
+
+  dispose() { this.clearAll(); }
 }
