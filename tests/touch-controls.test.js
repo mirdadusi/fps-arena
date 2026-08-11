@@ -24,6 +24,7 @@ describe('TouchControls', () => {
       <div id="touch-controls">
         <div id="touch-move-zone"><div id="touch-stick-inner"></div></div>
         <div id="touch-look-zone"></div>
+        <div id="touch-btn-menu"></div>
         <div id="touch-btn-fire"></div><div id="touch-btn-reload"></div>
         <div id="touch-btn-grenade"></div><div id="touch-btn-jump"></div>
         <div id="touch-btn-crouch"></div>
@@ -76,6 +77,20 @@ describe('TouchControls', () => {
     expect(controls.moveX).toBeCloseTo(1);
     expect(controls.moveY).toBeCloseTo(0);
     dispatchPointer(zone, 'pointerup', { pointerId: 3, clientX: 180, clientY: 500 });
+    expect(controls.moveX).toBe(0);
+  });
+
+  it('exposes a touch pause action and releases held controls', () => {
+    const move = document.getElementById('touch-move-zone');
+    dispatchPointer(move, 'pointerdown', { pointerId: 3, clientX: 80, clientY: 500 });
+    dispatchPointer(move, 'pointermove', { pointerId: 3, clientX: 120, clientY: 500 });
+    dispatchPointer(document.getElementById('touch-btn-fire'), 'pointerdown', { pointerId: 4 });
+    dispatchPointer(document.getElementById('touch-btn-menu'), 'pointerdown', { pointerId: 5 });
+
+    expect(controls.wantsMenu).toBe(true);
+    controls.releaseAll();
+    expect(controls.wantsMenu).toBe(false);
+    expect(controls.shooting).toBe(false);
     expect(controls.moveX).toBe(0);
   });
 });

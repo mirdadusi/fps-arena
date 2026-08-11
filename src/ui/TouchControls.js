@@ -30,6 +30,7 @@ export class TouchControls {
   wantsGrenade = false;
   wantsJump = false;
   crouching = false;
+  wantsMenu = false;
   weaponSwitch = -1;
 
   constructor() {
@@ -192,6 +193,14 @@ export class TouchControls {
       }
     }
 
+    const menuButton = document.getElementById('touch-btn-menu');
+    const menuEvent = typeof window.PointerEvent === 'function' ? 'pointerdown' : 'touchstart';
+    this.#lifetime.listen(menuButton, menuEvent, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.wantsMenu = true;
+    }, { passive: false });
+
     for (let i = 0; i < 4; i++) {
       const button = document.getElementById(`touch-btn-w${i}`);
       const eventName = typeof window.PointerEvent === 'function' ? 'pointerdown' : 'touchstart';
@@ -257,6 +266,12 @@ export class TouchControls {
     this.wantsGrenade = false;
     this.wantsJump = false;
     this.crouching = false;
+    this.wantsMenu = false;
+  }
+
+  /** Release every held pointer before the game enters a modal menu. */
+  releaseAll() {
+    this.#resetState();
   }
 
   /** Consume per-frame look and one-shot weapon inputs. */
