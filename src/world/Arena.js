@@ -6,6 +6,7 @@ import { Lifetime } from '../core/Lifetime.js';
 import { disposeObject3D } from '../rendering/disposeObject3D.js';
 import { VillageWorld } from './VillageWorld.js';
 import { villageGroundHeight } from './VillageTerrain.js';
+import { createProceduralTexture } from '../rendering/ProceduralTextures.js';
 
 /**
  * Arena — builds the 3D world: floor, walls, pillars, crates, lighting.
@@ -28,6 +29,10 @@ export class Arena {
   #proceduralWorld = null;
   #lifetime = new Lifetime();
   #destroyed = false;
+  #pixelRatio = 1;
+  #maxPixelRatio = 1;
+  #frameTimeEMA = 1 / 60;
+  #qualityTimer = 0;
 
   get pickupSpots()   { return this.#currentLayout?.pickupSpots || []; }
   get playerSpawns()  { return this.#currentLayout?.playerSpawns || []; }
@@ -83,9 +88,13 @@ export class Arena {
   // ── Setup ─────────────────────────────────────────────────
 
   #initRenderer() {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    const constrainedDevice = coarsePointer || (navigator.hardwareConcurrency ?? 8) <= 4 || (navigator.deviceMemory ?? 8) <= 4;
+    this.#maxPixelRatio = Math.min(window.devicePixelRatio || 1, constrainedDevice ? 1.15 : 1.5);
+    this.#pixelRatio = constrainedDevice ? Math.min(1, this.#maxPixelRatio) : this.#maxPixelRatio;
+    this.renderer.setPixelRatio(this.#pixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -120,10 +129,24 @@ export class Arena {
 
   #initMaterials() {
     const village = this.environment === 'village';
-    this.#floorMat = new THREE.MeshStandardMaterial({ color: village ? 0x53773b : 0x333340, roughness: village ? 1 : 0.7, metalness: village ? 0 : 0.2 });
-    this.#wallMat  = new THREE.MeshStandardMaterial({ color: village ? 0x4e493d : 0x444455, roughness: village ? 1 : 0.6, metalness: village ? 0 : 0.3 });
-    this.#pillarMat = new THREE.MeshStandardMaterial({ color: 0x556666, roughness: 0.4, metalness: 0.5 });
-    this.#crateMat = new THREE.MeshStandardMaterial({ color: 0x886644, roughness: 0.8, metalness: 0.1 });
+    this.#floorMat = new THREE.MeshStandardMaterial({
+      color: village ? 0x53773b : 0xffffff,
+      map: village ? null : createProceduralTexture({ base: 0x333340, pattern: 'stone', seed: 47, repeat: [14, 14] }),
+      roughness: village ? 1 : 0.7, metalness: village ? 0 : 0.2,
+    });
+    this.#wallMat = new THREE.MeshStandardMaterial({
+      color: village ? 0x4e493d : 0xffffff,
+      map: village ? null : createProceduralTexture({ base: 0x444455, pattern: 'stone', seed: 53, repeat: [6, 3] }),
+      roughness: village ? 1 : 0.6, metalness: village ? 0 : 0.3,
+    });
+    this.#pillarMat = new THREE.MeshStandardMaterial({
+      map: createProceduralTexture({ base: 0x556666, pattern: 'stone', seed: 59, repeat: [3, 5] }),
+      roughness: 0.4, metalness: 0.5,
+    });
+    this.#crateMat = new THREE.MeshStandardMaterial({
+      map: createProceduralTexture({ base: 0x886644, pattern: 'wood', seed: 61, repeat: [2, 2] }),
+      roughness: 0.8, metalness: 0.1,
+    });
   }
 
   // ── Lighting ──────────────────────────────────────────────
@@ -136,7 +159,8 @@ export class Arena {
     const dir = new THREE.DirectionalLight(r.dirLightColor, r.dirLightIntensity);
     dir.position.set(20, 30, 10);
     dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
+    const shadowSize = this.#maxPixelRatio <= 1.15 ? 1024 : 1536;
+    dir.shadow.mapSize.set(shadowSize, shadowSize);
     dir.shadow.camera.left = dir.shadow.camera.bottom = -40;
     dir.shadow.camera.right = dir.shadow.camera.top = 40;
     this.scene.add(dir);
@@ -270,6 +294,22 @@ export class Arena {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  /** Reduce GPU fill-rate before a sustained slow frame rate becomes a stall. */
+  updatePerformance(dt) {
+    const sample = Math.min(Math.max(dt, 1 / 240), 0.05);
+    this.#frameTimeEMA += (sample - this.#frameTimeEMA) * 0.04;
+    this.#qualityTimer += dt;
+    if (this.#qualityTimer < 1.5) return;
+    this.#qualityTimer = 0;
+
+    let nextRatio = this.#pixelRatio;
+    if (this.#frameTimeEMA > 1 / 43) nextRatio = Math.max(0.72, this.#pixelRatio - 0.15);
+    else if (this.#frameTimeEMA < 1 / 58) nextRatio = Math.min(this.#maxPixelRatio, this.#pixelRatio + 0.08);
+    if (Math.abs(nextRatio - this.#pixelRatio) < 0.01) return;
+    this.#pixelRatio = nextRatio;
+    this.renderer.setPixelRatio(this.#pixelRatio);
+  }
+
   render() {
     this.renderer.render(this.scene, this.camera);
   }
@@ -281,6 +321,9 @@ export class Arena {
     this.#proceduralWorld?.destroy();
     this.#proceduralWorld = null;
     disposeObject3D(this.scene);
+    const materials = [this.#floorMat, this.#wallMat, this.#pillarMat, this.#crateMat];
+    const textures = new Set(materials.map(material => material?.map).filter(Boolean));
+    for (const texture of textures) texture.dispose();
     this.#floorMat?.dispose();
     this.#wallMat?.dispose();
     this.#pillarMat?.dispose();

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Config } from '../Config.js';
 import { villageGroundHeight } from './VillageTerrain.js';
 import { disposeObject3D } from '../rendering/disposeObject3D.js';
+import { createProceduralTexture } from '../rendering/ProceduralTextures.js';
 
 /**
  * Procedural, asset-free village environment. Geometry creation lives outside
@@ -14,6 +15,19 @@ export class VillageWorld {
   constructor(scene, addCollider) {
     this.scene = scene;
     this.addCollider = addCollider;
+    // Repeated scenery uses one GPU geometry per shape and is transformed by
+    // each mesh. This replaces more than a hundred near-identical buffers.
+    this.geometries = {
+      box: new THREE.BoxGeometry(1, 1, 1),
+      plane: new THREE.PlaneGeometry(1, 1),
+      trunk: new THREE.CylinderGeometry(0.28, 0.42, 1, 7),
+      crown: new THREE.ConeGeometry(1, 1, 7),
+      shrub: new THREE.DodecahedronGeometry(1, 0),
+      rock: new THREE.DodecahedronGeometry(1, 1),
+      log: new THREE.CylinderGeometry(0.42, 0.5, 1, 8),
+      bale: new THREE.CylinderGeometry(0.8, 0.8, 1, 12),
+      roof: new THREE.ConeGeometry(1, 1, 4),
+    };
     this.materials = this.#createMaterials();
     this.group.name = 'village-world';
     scene.add(this.group);
@@ -28,19 +42,20 @@ export class VillageWorld {
   }
 
   #createMaterials() {
+    const texture = (base, pattern, seed, repeat) => createProceduralTexture({ base, pattern, seed, repeat });
     return {
-      grass: new THREE.MeshStandardMaterial({ color: 0x53773b, roughness: 1 }),
-      road: new THREE.MeshStandardMaterial({ color: 0x8b7657, roughness: 1 }),
-      stone: new THREE.MeshStandardMaterial({ color: 0x64645e, roughness: 0.95 }),
-      stoneDark: new THREE.MeshStandardMaterial({ color: 0x343733, roughness: 1 }),
-      wood: new THREE.MeshStandardMaterial({ color: 0x68462b, roughness: 0.9 }),
-      woodDark: new THREE.MeshStandardMaterial({ color: 0x352419, roughness: 0.95 }),
-      plaster: new THREE.MeshStandardMaterial({ color: 0xc1ad83, roughness: 0.95 }),
-      roof: new THREE.MeshStandardMaterial({ color: 0x75372b, roughness: 0.9 }),
-      leaf: new THREE.MeshStandardMaterial({ color: 0x274d27, roughness: 1 }),
-      leafLight: new THREE.MeshStandardMaterial({ color: 0x3d6932, roughness: 1 }),
+      grass: new THREE.MeshStandardMaterial({ map: texture(0x53773b, 'grass', 3, [16, 16]), roughness: 1 }),
+      road: new THREE.MeshStandardMaterial({ map: texture(0x8b7657, 'stone', 7, [7, 12]), roughness: 1 }),
+      stone: new THREE.MeshStandardMaterial({ map: texture(0x64645e, 'stone', 11, [3, 3]), roughness: 0.95 }),
+      stoneDark: new THREE.MeshStandardMaterial({ map: texture(0x343733, 'stone', 13, [3, 3]), roughness: 1 }),
+      wood: new THREE.MeshStandardMaterial({ map: texture(0x68462b, 'wood', 17, [2, 5]), roughness: 0.9 }),
+      woodDark: new THREE.MeshStandardMaterial({ map: texture(0x352419, 'wood', 19, [2, 5]), roughness: 0.95 }),
+      plaster: new THREE.MeshStandardMaterial({ map: texture(0xc1ad83, 'plaster', 23, [4, 3]), roughness: 0.95 }),
+      roof: new THREE.MeshStandardMaterial({ map: texture(0x75372b, 'roof', 29, [5, 5]), roughness: 0.9 }),
+      leaf: new THREE.MeshStandardMaterial({ map: texture(0x274d27, 'grass', 31, [3, 3]), roughness: 1 }),
+      leafLight: new THREE.MeshStandardMaterial({ map: texture(0x3d6932, 'grass', 37, [3, 3]), roughness: 1 }),
       glass: new THREE.MeshStandardMaterial({ color: 0x8fc6c8, roughness: 0.15, metalness: 0.1 }),
-      hay: new THREE.MeshStandardMaterial({ color: 0xb9923f, roughness: 1 }),
+      hay: new THREE.MeshStandardMaterial({ map: texture(0xb9923f, 'hay', 41, [3, 4]), roughness: 1 }),
     };
   }
 
@@ -52,8 +67,9 @@ export class VillageWorld {
   }
 
   #box(x, y, z, w, h, d, material, collider = true) {
-    const mesh = this.#add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material));
+    const mesh = this.#add(new THREE.Mesh(this.geometries.box, material));
     mesh.position.set(x, y + h / 2, z);
+    mesh.scale.set(w, h, d);
     if (collider) this.addCollider(x, y, z, w, h, d);
     return mesh;
   }
@@ -73,10 +89,11 @@ export class VillageWorld {
 
   #buildRoads() {
     const road = (x, z, w, d, rotation = 0) => {
-      const mesh = this.#add(new THREE.Mesh(new THREE.PlaneGeometry(w, d), this.materials.road), false, true);
+      const mesh = this.#add(new THREE.Mesh(this.geometries.plane, this.materials.road), false, true);
       mesh.rotation.x = -Math.PI / 2;
       mesh.rotation.z = rotation;
       mesh.position.set(x, 0.055, z);
+      mesh.scale.set(w, d, 1);
     };
     road(0, 0, 8, 54);
     road(0, 0, 46, 7);
@@ -129,14 +146,15 @@ export class VillageWorld {
     // A low interior divider produces meaningful room-clearing choices.
     this.#box(x, floor, z + d * 0.12, w * 0.45, 2.2, 0.22, this.materials.wood);
 
-    const roofGeo = new THREE.ConeGeometry(Math.max(w, d) * 0.72, 2.6, 4);
-    const roof = this.#add(new THREE.Mesh(roofGeo, this.materials.roof));
+    const roof = this.#add(new THREE.Mesh(this.geometries.roof, this.materials.roof));
     roof.position.set(x, floor + h + 1.15, z);
     roof.rotation.y = Math.PI / 4;
+    roof.scale.set(Math.max(w, d) * 0.72, 2.6, Math.max(w, d) * 0.72);
 
     // Lit-looking windows without external texture assets.
-    const pane = this.#add(new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.85), this.materials.glass), false, false);
+    const pane = this.#add(new THREE.Mesh(this.geometries.plane, this.materials.glass), false, false);
     pane.position.set(x, floor + 1.8, z - d / 2 - 0.181);
+    pane.scale.set(1.15, 0.85, 1);
   }
 
   #barn(x, z) {
@@ -151,13 +169,15 @@ export class VillageWorld {
     this.#box(x, floor, z + d / 2, w, h, t, this.materials.wood);
     this.#box(x - w / 2, floor, z, t, h, d, this.materials.wood);
     this.#box(x + w / 2, floor, z, t, h, d, this.materials.wood);
-    const roof = this.#add(new THREE.Mesh(new THREE.ConeGeometry(8.2, 3.4, 4), this.materials.roof));
+    const roof = this.#add(new THREE.Mesh(this.geometries.roof, this.materials.roof));
     roof.position.set(x, floor + h + 1.35, z);
     roof.rotation.y = Math.PI / 4;
+    roof.scale.set(8.2, 3.4, 8.2);
     for (const [ox, oz] of [[-3, 1.4], [3, 1.5], [0, 2.8]]) {
-      const bale = this.#add(new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1.4, 12), this.materials.hay));
+      const bale = this.#add(new THREE.Mesh(this.geometries.bale, this.materials.hay));
       bale.rotation.z = Math.PI / 2;
       bale.position.set(x + ox, floor + 0.8, z + oz);
+      bale.scale.y = 1.4;
       this.addCollider(x + ox, floor, z + oz, 1.4, 1.6, 1.6);
     }
   }
@@ -177,9 +197,9 @@ export class VillageWorld {
     ];
     for (const [x, z] of bushes) {
       const y = villageGroundHeight(x, z);
-      const shrub = this.#add(new THREE.Mesh(new THREE.DodecahedronGeometry(1.25, 0), this.materials.leafLight));
+      const shrub = this.#add(new THREE.Mesh(this.geometries.shrub, this.materials.leafLight), false, true);
       shrub.position.set(x, y + 0.85, z);
-      shrub.scale.set(1.35, 0.75, 1.1);
+      shrub.scale.set(1.69, 0.94, 1.38);
       this.addCollider(x, y + 0.15, z, 2.8, 1.5, 2.3, {
         blocksMovement: false,
         blocksSight: true,
@@ -190,18 +210,17 @@ export class VillageWorld {
   #tree(x, z, scale) {
     const y = villageGroundHeight(x, z);
     const trunkH = 3.6 * scale;
-    const trunk = this.#add(new THREE.Mesh(
-      new THREE.CylinderGeometry(0.28 * scale, 0.42 * scale, trunkH, 7),
-      this.materials.woodDark,
-    ));
+    const trunk = this.#add(new THREE.Mesh(this.geometries.trunk, this.materials.woodDark));
     trunk.position.set(x, y + trunkH / 2, z);
+    trunk.scale.set(scale, trunkH, scale);
     this.addCollider(x, y, z, 0.72 * scale, trunkH, 0.72 * scale);
     for (let level = 0; level < 3; level++) {
       const crown = this.#add(new THREE.Mesh(
-        new THREE.ConeGeometry((2.2 - level * 0.35) * scale, 2.8 * scale, 7),
+        this.geometries.crown,
         level % 2 ? this.materials.leafLight : this.materials.leaf,
-      ));
+      ), false, true);
       crown.position.set(x, y + trunkH + 0.5 + level * 1.35 * scale, z);
+      crown.scale.set((2.2 - level * 0.35) * scale, 2.8 * scale, (2.2 - level * 0.35) * scale);
     }
     this.addCollider(x, y + trunkH - 0.2, z, 3.5 * scale, 4.5 * scale, 3.5 * scale, {
       blocksMovement: false,
@@ -217,7 +236,7 @@ export class VillageWorld {
       [14.6,24,3.5,4.5,4.5],[22.4,24,3.5,4.5,4.5],
     ];
     for (const [x,z,w,h,d] of rocks) {
-      const mesh = this.#add(new THREE.Mesh(new THREE.DodecahedronGeometry(1, 1), this.materials.stoneDark));
+      const mesh = this.#add(new THREE.Mesh(this.geometries.rock, this.materials.stoneDark));
       mesh.position.set(x, h / 2 - 0.2, z);
       mesh.scale.set(w / 2, h / 2, d / 2);
       this.addCollider(x, 0, z, w * 0.82, h, d * 0.82);
@@ -238,9 +257,9 @@ export class VillageWorld {
     const boulders = [[-7,-14,1.4],[8,-16,1.7],[-8,18,1.5],[6,19,1.25],[-22,3,1.6],[23,2,1.4]];
     for (const [x,z,r] of boulders) {
       const y = villageGroundHeight(x, z);
-      const mesh = this.#add(new THREE.Mesh(new THREE.DodecahedronGeometry(r, 1), this.materials.stone));
+      const mesh = this.#add(new THREE.Mesh(this.geometries.rock, this.materials.stone));
       mesh.position.set(x, y + r * 0.72, z);
-      mesh.scale.y = 0.72;
+      mesh.scale.set(r, r * 0.72, r);
       mesh.rotation.set(0.12, x * 0.17, -0.08);
       this.addCollider(x, y, z, r * 1.7, r * 1.35, r * 1.7);
     }
@@ -248,10 +267,11 @@ export class VillageWorld {
     // Jumpable fallen logs.
     for (const [x,z,rot] of [[-7,7,0.25],[5,-11,-0.35],[-18,2,0.1]]) {
       const y = villageGroundHeight(x, z);
-      const log = this.#add(new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 4.5, 8), this.materials.woodDark));
+      const log = this.#add(new THREE.Mesh(this.geometries.log, this.materials.woodDark));
       log.rotation.z = Math.PI / 2;
       log.rotation.y = rot;
       log.position.set(x, y + 0.5, z);
+      log.scale.y = 4.5;
       this.addCollider(x, y, z, 4.4, 0.95, 1.0);
     }
   }
