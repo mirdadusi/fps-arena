@@ -95,6 +95,7 @@ export class Game {
   // Session
   #locked    = false;
   #gameOver  = false;
+  #touchPaused = false;
   #score     = 0;
   #kills     = 0;
   #deaths    = 0;
@@ -389,7 +390,8 @@ export class Game {
 
     this.#lifetime.listen(document.getElementById('resume-game-btn'), 'click', e => {
       e.stopPropagation();
-      this.#requestPointerLock();
+      if (this.#touch.active) this.#closeTouchMenu();
+      else this.#requestPointerLock();
     });
     this.#lifetime.listen(document.getElementById('return-lobby-btn'), 'click', e => {
       e.stopPropagation();
@@ -677,6 +679,7 @@ export class Game {
     this.#lifetime.dispose();
     if (document.pointerLockElement === this.#arena.renderer.domElement) document.exitPointerLock?.();
     document.body.classList.remove('game-active');
+    document.body.classList.remove('touch-menu-open');
     for (const unsub of this.#netUnsubs) unsub();
     this.#netUnsubs.length = 0;
     for (const [, rp] of this.#remotePlayers) rp.destroy();
@@ -722,7 +725,7 @@ export class Game {
       this.#handleTouchInput(dt);
     }
 
-    if ((this.#locked || this.#touch.active) && !this.#gameOver) {
+    if ((this.#locked || this.#touch.active) && !this.#gameOver && !this.#touchPaused) {
       // Player
       const speedMul = this.#pickups.getSpeedMultiplier();
       this.#scratchPlayerPosition.copy(this.#player.position);
@@ -917,11 +920,26 @@ export class Game {
   }
 
   #handleTouchInput(dt) {
+    if (this.#touch.wantsMenu) {
+      this.#touch.releaseAll();
+      this.#touchPaused = true;
+      document.body.classList.add('touch-menu-open');
+      this.#ui.showBlocker();
+      return;
+    }
+    if (this.#touchPaused) return;
+
     // Touch look -> player look is handled in player.updateFromTouch
     // Auto-lock for touch devices
     if (!this.#locked && !this.#gameOver) {
       this.#locked = true;
       this.#ui.hideBlocker();
     }
+  }
+
+  #closeTouchMenu() {
+    this.#touchPaused = false;
+    document.body.classList.remove('touch-menu-open');
+    this.#ui.hideBlocker();
   }
 }
