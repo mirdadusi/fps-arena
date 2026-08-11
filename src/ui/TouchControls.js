@@ -1,16 +1,26 @@
 import { Lifetime } from '../core/Lifetime.js';
 
+const MOVE_RADIUS = 50;
+const LOOK_SCALE = 0.65;
+
 /**
- * TouchControls — virtual joystick and buttons for mobile play.
- * Auto-detects touch devices and shows/hides UI accordingly.
+ * Dual-stick mobile controls. Pointer Events are preferred because pointer
+ * capture keeps independent move/look/fire fingers reliable on iPadOS.
  */
 export class TouchControls {
   #el;
-  #moveStick;
-  #lookArea;
+  #moveZone;
+  #lookZone;
+  #stick;
   #active = false;
+  #movePointer = null;
+  #lookPointer = null;
+  #moveOriginX = 0;
+  #moveOriginY = 0;
+  #lookPrevX = 0;
+  #lookPrevY = 0;
+  #lifetime = new Lifetime();
 
-  // State exposed to Game/Player
   moveX = 0;
   moveY = 0;
   lookDX = 0;
@@ -20,24 +30,32 @@ export class TouchControls {
   wantsGrenade = false;
   wantsJump = false;
   crouching = false;
-  weaponSwitch = -1; // -1 = none
-
-  #moveOrigin = null;
-  #moveTouch = null;
-  #lookTouch = null;
-  #lookPrev = null;
-  #lifetime = new Lifetime();
+  weaponSwitch = -1;
 
   constructor() {
     this.#el = document.getElementById('touch-controls');
     if (!this.#el) return;
 
     this.#active = this.#isTouchDevice();
-    if (!this.#active) { this.#el.style.display = 'none'; return; }
+    if (!this.#active) {
+      this.#el.style.display = 'none';
+      return;
+    }
 
+    this.#moveZone = document.getElementById('touch-move-zone');
+    this.#lookZone = document.getElementById('touch-look-zone');
+    this.#stick = document.getElementById('touch-stick-inner');
     this.#el.style.display = 'block';
     document.body.classList.add('is-touch');
-    this.#bindTouch();
+
+    if (typeof window.PointerEvent === 'function') this.#bindPointerEvents();
+    else this.#bindLegacyTouchEvents();
+    this.#bindActionButtons();
+
+    this.#lifetime.listen(window, 'blur', () => this.#resetState());
+    this.#lifetime.listen(document, 'visibilitychange', () => {
+      if (document.hidden) this.#resetState();
+    });
   }
 
   get active() { return this.#active; }
@@ -46,136 +64,218 @@ export class TouchControls {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   }
 
-  #bindTouch() {
-    const moveZone = document.getElementById('touch-move-zone');
-    const lookZone = document.getElementById('touch-look-zone');
-
-    // Move joystick
-    this.#lifetime.listen(moveZone, 'touchstart', e => {
+  #bindPointerEvents() {
+    this.#lifetime.listen(this.#moveZone, 'pointerdown', e => {
+      if (this.#movePointer !== null) return;
       e.preventDefault();
-      const t = e.changedTouches[0];
-      this.#moveTouch = t.identifier;
-      this.#moveOrigin = { x: t.clientX, y: t.clientY };
-    }, { passive: false });
-
-    this.#lifetime.listen(moveZone, 'touchmove', e => {
+      this.#movePointer = e.pointerId;
+      this.#moveOriginX = e.clientX;
+      this.#moveOriginY = e.clientY;
+      this.#capture(e.currentTarget, e.pointerId);
+    });
+    this.#lifetime.listen(this.#moveZone, 'pointermove', e => {
+      if (e.pointerId !== this.#movePointer) return;
       e.preventDefault();
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.#moveTouch && this.#moveOrigin) {
-          const dx = t.clientX - this.#moveOrigin.x;
-          const dy = t.clientY - this.#moveOrigin.y;
-          const maxR = 50;
-          const dist = Math.min(Math.sqrt(dx * dx + dy * dy), maxR);
-          const angle = Math.atan2(dy, dx);
-          this.moveX = (dist / maxR) * Math.cos(angle);
-          this.moveY = (dist / maxR) * Math.sin(angle);
-
-          // Visual feedback on stick
-          const stick = document.getElementById('touch-stick-inner');
-          if (stick) {
-            stick.style.transform = `translate(${this.moveX * 30}px, ${this.moveY * 30}px)`;
-          }
-        }
-      }
-    }, { passive: false });
-
+      this.#updateMove(e.clientX, e.clientY);
+    });
     const endMove = e => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.#moveTouch) {
-          this.#moveTouch = null;
-          this.#moveOrigin = null;
-          this.moveX = 0;
-          this.moveY = 0;
-          const stick = document.getElementById('touch-stick-inner');
-          if (stick) stick.style.transform = 'translate(0, 0)';
-        }
-      }
+      if (e.pointerId === this.#movePointer) this.#resetMove();
     };
-    this.#lifetime.listen(moveZone, 'touchend', endMove);
-    this.#lifetime.listen(moveZone, 'touchcancel', endMove);
+    this.#lifetime.listen(this.#moveZone, 'pointerup', endMove);
+    this.#lifetime.listen(this.#moveZone, 'pointercancel', endMove);
+    this.#lifetime.listen(this.#moveZone, 'lostpointercapture', endMove);
 
-    // Look area (right side)
-    this.#lifetime.listen(lookZone, 'touchstart', e => {
+    this.#lifetime.listen(this.#lookZone, 'pointerdown', e => {
+      if (this.#lookPointer !== null) return;
       e.preventDefault();
-      const t = e.changedTouches[0];
-      this.#lookTouch = t.identifier;
-      this.#lookPrev = { x: t.clientX, y: t.clientY };
-      this.shooting = true;
-    }, { passive: false });
-
-    this.#lifetime.listen(lookZone, 'touchmove', e => {
+      this.#lookPointer = e.pointerId;
+      this.#lookPrevX = e.clientX;
+      this.#lookPrevY = e.clientY;
+      this.#capture(e.currentTarget, e.pointerId);
+    });
+    this.#lifetime.listen(this.#lookZone, 'pointermove', e => {
+      if (e.pointerId !== this.#lookPointer) return;
       e.preventDefault();
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.#lookTouch && this.#lookPrev) {
-          this.lookDX = (t.clientX - this.#lookPrev.x) * 0.4;
-          this.lookDY = (t.clientY - this.#lookPrev.y) * 0.4;
-          this.#lookPrev = { x: t.clientX, y: t.clientY };
-        }
-      }
-    }, { passive: false });
-
+      this.#updateLook(e.clientX, e.clientY);
+    });
     const endLook = e => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this.#lookTouch) {
-          this.#lookTouch = null;
-          this.#lookPrev = null;
-          this.shooting = false;
-          this.lookDX = 0;
-          this.lookDY = 0;
-        }
-      }
+      if (e.pointerId === this.#lookPointer) this.#resetLook();
     };
-    this.#lifetime.listen(lookZone, 'touchend', endLook);
-    this.#lifetime.listen(lookZone, 'touchcancel', endLook);
+    this.#lifetime.listen(this.#lookZone, 'pointerup', endLook);
+    this.#lifetime.listen(this.#lookZone, 'pointercancel', endLook);
+    this.#lifetime.listen(this.#lookZone, 'lostpointercapture', endLook);
+  }
 
-    // Action buttons
-    this.#lifetime.listen(document.getElementById('touch-btn-reload'), 'touchstart', e => {
-      e.preventDefault(); this.wantsReload = true;
-    });
-    this.#lifetime.listen(document.getElementById('touch-btn-reload'), 'touchend', () => { this.wantsReload = false; });
-
-    this.#lifetime.listen(document.getElementById('touch-btn-grenade'), 'touchstart', e => {
-      e.preventDefault(); this.wantsGrenade = true;
-    });
-    this.#lifetime.listen(document.getElementById('touch-btn-grenade'), 'touchend', () => { this.wantsGrenade = false; });
-
-    this.#lifetime.listen(document.getElementById('touch-btn-jump'), 'touchstart', e => {
-      e.preventDefault(); this.wantsJump = true;
-    });
-    this.#lifetime.listen(document.getElementById('touch-btn-jump'), 'touchend', () => { this.wantsJump = false; });
-
-    this.#lifetime.listen(document.getElementById('touch-btn-crouch'), 'touchstart', e => {
-      e.preventDefault(); this.crouching = true;
-    });
-    this.#lifetime.listen(document.getElementById('touch-btn-crouch'), 'touchend', () => { this.crouching = false; });
-
-    // Weapon switch buttons
-    for (let i = 0; i < 4; i++) {
-      const btn = document.getElementById(`touch-btn-w${i}`);
-      this.#lifetime.listen(btn, 'touchstart', e => {
-        e.preventDefault();
-        this.weaponSwitch = i;
+  /** Touch Events fallback for iOS versions before Pointer Events. */
+  #bindLegacyTouchEvents() {
+    this.#lifetime.listen(this.#moveZone, 'touchstart', e => {
+      if (this.#movePointer !== null) return;
+      e.preventDefault();
+      const touch = e.changedTouches.item(0);
+      if (!touch) return;
+      this.#movePointer = touch.identifier;
+      this.#moveOriginX = touch.clientX;
+      this.#moveOriginY = touch.clientY;
+    }, { passive: false });
+    this.#lifetime.listen(this.#moveZone, 'touchmove', e => {
+      e.preventDefault();
+      this.#forChangedTouch(e, touch => {
+        if (touch.identifier === this.#movePointer) this.#updateMove(touch.clientX, touch.clientY);
       });
+    }, { passive: false });
+    const endMove = e => this.#forChangedTouch(e, touch => {
+      if (touch.identifier === this.#movePointer) this.#resetMove();
+    });
+    this.#lifetime.listen(this.#moveZone, 'touchend', endMove, { passive: false });
+    this.#lifetime.listen(this.#moveZone, 'touchcancel', endMove, { passive: false });
+
+    this.#lifetime.listen(this.#lookZone, 'touchstart', e => {
+      if (this.#lookPointer !== null) return;
+      e.preventDefault();
+      const touch = e.changedTouches.item(0);
+      if (!touch) return;
+      this.#lookPointer = touch.identifier;
+      this.#lookPrevX = touch.clientX;
+      this.#lookPrevY = touch.clientY;
+    }, { passive: false });
+    this.#lifetime.listen(this.#lookZone, 'touchmove', e => {
+      e.preventDefault();
+      this.#forChangedTouch(e, touch => {
+        if (touch.identifier === this.#lookPointer) this.#updateLook(touch.clientX, touch.clientY);
+      });
+    }, { passive: false });
+    const endLook = e => this.#forChangedTouch(e, touch => {
+      if (touch.identifier === this.#lookPointer) this.#resetLook();
+    });
+    this.#lifetime.listen(this.#lookZone, 'touchend', endLook, { passive: false });
+    this.#lifetime.listen(this.#lookZone, 'touchcancel', endLook, { passive: false });
+  }
+
+  #bindActionButtons() {
+    const holdActions = [
+      ['touch-btn-fire', value => { this.shooting = value; }],
+      ['touch-btn-reload', value => { this.wantsReload = value; }],
+      ['touch-btn-grenade', value => { this.wantsGrenade = value; }],
+      ['touch-btn-jump', value => { this.wantsJump = value; }],
+      ['touch-btn-crouch', value => { this.crouching = value; }],
+    ];
+
+    for (const [id, setValue] of holdActions) {
+      const button = document.getElementById(id);
+      if (typeof window.PointerEvent === 'function') {
+        let pointer = null;
+        this.#lifetime.listen(button, 'pointerdown', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          pointer = e.pointerId;
+          setValue(true);
+          this.#capture(e.currentTarget, e.pointerId);
+        });
+        const release = e => {
+          if (pointer !== null && e.pointerId === pointer) {
+            pointer = null;
+            setValue(false);
+          }
+        };
+        this.#lifetime.listen(button, 'pointerup', release);
+        this.#lifetime.listen(button, 'pointercancel', release);
+        this.#lifetime.listen(button, 'lostpointercapture', release);
+      } else {
+        this.#lifetime.listen(button, 'touchstart', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          setValue(true);
+        }, { passive: false });
+        const release = e => { e.preventDefault(); setValue(false); };
+        this.#lifetime.listen(button, 'touchend', release, { passive: false });
+        this.#lifetime.listen(button, 'touchcancel', release, { passive: false });
+      }
+    }
+
+    for (let i = 0; i < 4; i++) {
+      const button = document.getElementById(`touch-btn-w${i}`);
+      const eventName = typeof window.PointerEvent === 'function' ? 'pointerdown' : 'touchstart';
+      this.#lifetime.listen(button, eventName, e => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.weaponSwitch = i;
+      }, { passive: false });
     }
   }
 
-  /** Call each frame to consume one-shot inputs. */
+  #capture(target, pointerId) {
+    try { target?.setPointerCapture?.(pointerId); } catch { /* capture is an optimisation */ }
+  }
+
+  #forChangedTouch(event, callback) {
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches.item(i);
+      if (touch) callback(touch);
+    }
+  }
+
+  #updateMove(clientX, clientY) {
+    const dx = clientX - this.#moveOriginX;
+    const dy = clientY - this.#moveOriginY;
+    const distance = Math.hypot(dx, dy);
+    const clamp = distance > MOVE_RADIUS ? MOVE_RADIUS / distance : 1;
+    this.moveX = (dx * clamp) / MOVE_RADIUS;
+    this.moveY = (dy * clamp) / MOVE_RADIUS;
+    if (this.#stick) {
+      this.#stick.style.transform = `translate(${this.moveX * 30}px, ${this.moveY * 30}px)`;
+    }
+  }
+
+  #updateLook(clientX, clientY) {
+    // Accumulate rather than overwrite. iPad can deliver two or more pointer
+    // samples between animation frames; overwriting silently discarded most
+    // of a swipe and made camera movement appear broken.
+    this.lookDX += (clientX - this.#lookPrevX) * LOOK_SCALE;
+    this.lookDY += (clientY - this.#lookPrevY) * LOOK_SCALE;
+    this.#lookPrevX = clientX;
+    this.#lookPrevY = clientY;
+  }
+
+  #resetMove() {
+    this.#movePointer = null;
+    this.moveX = 0;
+    this.moveY = 0;
+    if (this.#stick) this.#stick.style.transform = 'translate(0, 0)';
+  }
+
+  #resetLook() {
+    this.#lookPointer = null;
+  }
+
+  #resetState() {
+    this.#resetMove();
+    this.#resetLook();
+    this.lookDX = 0;
+    this.lookDY = 0;
+    this.shooting = false;
+    this.wantsReload = false;
+    this.wantsGrenade = false;
+    this.wantsJump = false;
+    this.crouching = false;
+  }
+
+  /** Consume per-frame look and one-shot weapon inputs. */
   consumeFrame() {
     this.lookDX = 0;
     this.lookDY = 0;
     if (this.weaponSwitch >= 0) {
-      const ws = this.weaponSwitch;
+      const weapon = this.weaponSwitch;
       this.weaponSwitch = -1;
-      return ws;
+      return weapon;
     }
     return -1;
   }
 
   destroy() {
     this.#lifetime.dispose();
+    this.#resetState();
+    this.weaponSwitch = -1;
     this.#el?.style.setProperty('display', 'none');
     document.body.classList.remove('is-touch');
-    this.moveX = this.moveY = this.lookDX = this.lookDY = 0;
-    this.shooting = this.wantsReload = this.wantsGrenade = this.wantsJump = this.crouching = false;
   }
 }

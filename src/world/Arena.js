@@ -7,6 +7,7 @@ import { disposeObject3D } from '../rendering/disposeObject3D.js';
 import { VillageWorld } from './VillageWorld.js';
 import { villageGroundHeight } from './VillageTerrain.js';
 import { createProceduralTexture } from '../rendering/ProceduralTextures.js';
+import { createRenderProfile } from '../rendering/RenderProfile.js';
 
 /**
  * Arena — builds the 3D world: floor, walls, pillars, crates, lighting.
@@ -33,11 +34,14 @@ export class Arena {
   #maxPixelRatio = 1;
   #frameTimeEMA = 1 / 60;
   #qualityTimer = 0;
+  #renderProfile = createRenderProfile();
 
   get pickupSpots()   { return this.#currentLayout?.pickupSpots || []; }
   get playerSpawns()  { return this.#currentLayout?.playerSpawns || []; }
   get navigationNodes() { return this.#currentLayout?.navigationNodes || []; }
   get environment() { return this.#currentLayout?.environment || 'arena'; }
+  get isConstrainedDevice() { return this.#renderProfile.constrained; }
+  get aiInterval() { return this.#renderProfile.aiInterval; }
 
   constructor(layoutName = 'classic') {
     this.#currentLayout = ARENA_LAYOUTS[layoutName] || ARENA_LAYOUTS.classic;
@@ -88,14 +92,18 @@ export class Arena {
   // ── Setup ─────────────────────────────────────────────────
 
   #initRenderer() {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    const profile = this.#renderProfile;
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: profile.antialias,
+      powerPreference: 'high-performance',
+      precision: profile.precision,
+      stencil: false,
+    });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    const coarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
-    const constrainedDevice = coarsePointer || (navigator.hardwareConcurrency ?? 8) <= 4 || (navigator.deviceMemory ?? 8) <= 4;
-    this.#maxPixelRatio = Math.min(window.devicePixelRatio || 1, constrainedDevice ? 1.15 : 1.5);
-    this.#pixelRatio = constrainedDevice ? Math.min(1, this.#maxPixelRatio) : this.#maxPixelRatio;
+    this.#maxPixelRatio = profile.maxPixelRatio;
+    this.#pixelRatio = profile.pixelRatio;
     this.renderer.setPixelRatio(this.#pixelRatio);
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = profile.shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = Config.rendering.toneMappingExposure;
@@ -158,9 +166,9 @@ export class Arena {
 
     const dir = new THREE.DirectionalLight(r.dirLightColor, r.dirLightIntensity);
     dir.position.set(20, 30, 10);
-    dir.castShadow = true;
-    const shadowSize = this.#maxPixelRatio <= 1.15 ? 1024 : 1536;
-    dir.shadow.mapSize.set(shadowSize, shadowSize);
+    dir.castShadow = this.#renderProfile.shadows;
+    const shadowSize = this.#renderProfile.constrained ? 512 : 1536;
+    if (dir.castShadow) dir.shadow.mapSize.set(shadowSize, shadowSize);
     dir.shadow.camera.left = dir.shadow.camera.bottom = -40;
     dir.shadow.camera.right = dir.shadow.camera.top = 40;
     this.scene.add(dir);
@@ -296,15 +304,17 @@ export class Arena {
 
   /** Reduce GPU fill-rate before a sustained slow frame rate becomes a stall. */
   updatePerformance(dt) {
-    const sample = Math.min(Math.max(dt, 1 / 240), 0.05);
+    const sample = Math.min(Math.max(dt, 1 / 240), 0.08);
     this.#frameTimeEMA += (sample - this.#frameTimeEMA) * 0.04;
-    this.#qualityTimer += dt;
+    this.#qualityTimer += Math.min(dt, 0.25);
     if (this.#qualityTimer < 1.5) return;
     this.#qualityTimer = 0;
 
     let nextRatio = this.#pixelRatio;
-    if (this.#frameTimeEMA > 1 / 43) nextRatio = Math.max(0.72, this.#pixelRatio - 0.15);
-    else if (this.#frameTimeEMA < 1 / 58) nextRatio = Math.min(this.#maxPixelRatio, this.#pixelRatio + 0.08);
+    if (this.#frameTimeEMA > 1 / 43) nextRatio = Math.max(this.#renderProfile.minPixelRatio, this.#pixelRatio - 0.15);
+    else if (this.#renderProfile.allowQualityIncrease && this.#frameTimeEMA < 1 / 58) {
+      nextRatio = Math.min(this.#maxPixelRatio, this.#pixelRatio + 0.08);
+    }
     if (Math.abs(nextRatio - this.#pixelRatio) < 0.01) return;
     this.#pixelRatio = nextRatio;
     this.renderer.setPixelRatio(this.#pixelRatio);

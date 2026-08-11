@@ -5,6 +5,8 @@ import { EnemyModelAssets } from '../src/entities/EnemyModelAssets.js';
 import { PhysicsSystem } from '../src/systems/PhysicsSystem.js';
 import { BulletSystem } from '../src/systems/BulletSystem.js';
 import { createProceduralTexture } from '../src/rendering/ProceduralTextures.js';
+import { createRenderProfile, isAppleTouchDevice } from '../src/rendering/RenderProfile.js';
+import { VillageWorld } from '../src/world/VillageWorld.js';
 
 describe('continuous collision', () => {
   const thinWall = {
@@ -79,5 +81,34 @@ describe('shared rendering resources', () => {
     expect(texture.wrapS).toBe(THREE.RepeatWrapping);
     expect(texture.colorSpace).toBe(THREE.SRGBColorSpace);
     texture.dispose();
+  });
+
+  it('batches the static Village into a small draw-call budget', () => {
+    const scene = new THREE.Scene();
+    const village = new VillageWorld(scene, () => {});
+    const meshes = [];
+    village.group.traverse(object => { if (object.isMesh) meshes.push(object); });
+    expect(meshes.length).toBeLessThanOrEqual(15);
+    expect(meshes.every(mesh => mesh.name.startsWith('village-static-batch-'))).toBe(true);
+    expect(village.group.children.some(object => object.isPointLight)).toBe(false);
+    village.destroy();
+  });
+});
+
+describe('mobile render profile', () => {
+  it('recognizes iPad desktop mode and starts below native pixel density', () => {
+    const input = {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)',
+      platform: 'MacIntel', maxTouchPoints: 5,
+      hardwareConcurrency: 8, deviceMemory: 8,
+      devicePixelRatio: 2, coarsePointer: true,
+    };
+    expect(isAppleTouchDevice(input)).toBe(true);
+    const profile = createRenderProfile(input);
+    expect(profile.appleTouch).toBe(true);
+    expect(profile.pixelRatio).toBe(0.85);
+    expect(profile.antialias).toBe(false);
+    expect(profile.shadows).toBe(false);
+    expect(profile.aiInterval).toBeCloseTo(1 / 30);
   });
 });

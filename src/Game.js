@@ -90,6 +90,7 @@ export class Game {
   #chat;
   #touch;
   #uiAccum = 0;
+  #aiAccum = 0;
 
   // Session
   #locked    = false;
@@ -712,7 +713,8 @@ export class Game {
     this.#animFrame = requestAnimationFrame(() => this.#loop());
 
     const now = performance.now();
-    const dt = Math.min((now - this.#prevTime) / 1000, 0.05);
+    const elapsed = Math.max(0, (now - this.#prevTime) / 1000);
+    const dt = Math.min(elapsed, 0.05);
     this.#prevTime = now;
 
     // Touch controls input
@@ -762,11 +764,23 @@ export class Game {
 
       // Bot AI
       const diff = this.#difficulty.getProfile(this.#kills);
+      let aiDt = dt;
+      if (this.#arena.aiInterval > 0) {
+        this.#aiAccum = Math.min(this.#aiAccum + dt, this.#arena.aiInterval * 2);
+        if (this.#aiAccum >= this.#arena.aiInterval) {
+          aiDt = this.#aiAccum;
+          this.#aiAccum = 0;
+        } else {
+          aiDt = 0;
+        }
+      }
       for (const bot of this.#bots) {
-        const shots = bot.ai.update(dt, this.#arena.camera.position, diff, this.#bots);
-        for (const dir of shots) {
-          this.#scratchOrigin.set(bot.enemy.position.x, bot.enemy.position.y + Config.enemy.ai.eyeHeight, bot.enemy.position.z);
-          this.#bullets.spawn(this.#scratchOrigin, dir, true);
+        if (aiDt > 0) {
+          const shots = bot.ai.update(aiDt, this.#arena.camera.position, diff, this.#bots);
+          for (const dir of shots) {
+            this.#scratchOrigin.set(bot.enemy.position.x, bot.enemy.position.y + Config.enemy.ai.eyeHeight, bot.enemy.position.z);
+            this.#bullets.spawn(this.#scratchOrigin, dir, true);
+          }
         }
         bot.enemy.updateAnimation(now);
       }
@@ -898,7 +912,7 @@ export class Game {
       this.#scoreboard.update(this.#getScoreboardData());
     }
 
-    this.#arena.updatePerformance(dt);
+    this.#arena.updatePerformance(elapsed);
     this.#arena.render();
   }
 
