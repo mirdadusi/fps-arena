@@ -371,6 +371,17 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'PLAYER_RESPAWN': {
+        const room = rooms.get(currentRoomId);
+        const position = cleanVector(msg.position, 100);
+        const player = room?.players.get(playerId);
+        if (!room || !player || !position) break;
+        player.hp = 100;
+        player.lastDamagedBy = null;
+        room.broadcast({ type: 'PLAYER_RESPAWN', playerId, position }, playerId);
+        break;
+      }
+
       // ── New message types ───────────────────────────────
 
       case 'CHAT_MESSAGE': {

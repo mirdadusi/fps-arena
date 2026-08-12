@@ -200,6 +200,11 @@ export class NetworkManager {
   sendPickupCollected(pickupId) { this.#send('PICKUP_COLLECTED', { pickupId }); }
   sendPlayerHit(targetId, damage) { this.#send('PLAYER_HIT', { targetId, damage }); }
   sendPlayerKilled(targetId) { this.#send('PLAYER_KILLED', { targetId }); }
+  sendPlayerRespawn(position) {
+    this.#send('PLAYER_RESPAWN', {
+      position: { x: position.x, y: position.y, z: position.z },
+    });
+  }
   sendChat(text) { this.#send('CHAT_MESSAGE', { text: String(text).slice(0, 200) }); }
   sendWeaponSwitch(weaponIndex) { this.#send('WEAPON_SWITCH', { weaponIndex }); }
   sendGrenadeThrow(origin, direction) {

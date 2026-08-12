@@ -1,7 +1,7 @@
 import { Lifetime } from '../core/Lifetime.js';
 
-const MOVE_RADIUS = 50;
-const LOOK_SCALE = 0.65;
+const MOVE_RADIUS = 56;
+const LOOK_SCALE = 0.82;
 
 /**
  * Dual-stick mobile controls. Pointer Events are preferred because pointer
@@ -19,6 +19,9 @@ export class TouchControls {
   #moveOriginY = 0;
   #lookPrevX = 0;
   #lookPrevY = 0;
+  #firePointer = null;
+  #firePrevX = 0;
+  #firePrevY = 0;
   #lifetime = new Lifetime();
 
   moveX = 0;
@@ -154,7 +157,6 @@ export class TouchControls {
 
   #bindActionButtons() {
     const holdActions = [
-      ['touch-btn-fire', value => { this.shooting = value; }],
       ['touch-btn-reload', value => { this.wantsReload = value; }],
       ['touch-btn-grenade', value => { this.wantsGrenade = value; }],
       ['touch-btn-jump', value => { this.wantsJump = value; }],
@@ -193,6 +195,8 @@ export class TouchControls {
       }
     }
 
+    this.#bindFireButton();
+
     const menuButton = document.getElementById('touch-btn-menu');
     const menuEvent = typeof window.PointerEvent === 'function' ? 'pointerdown' : 'touchstart';
     this.#lifetime.listen(menuButton, menuEvent, e => {
@@ -210,6 +214,69 @@ export class TouchControls {
         this.weaponSwitch = i;
       }, { passive: false });
     }
+  }
+
+  /** The primary button is also a look pad, enabling aim-and-fire with one thumb. */
+  #bindFireButton() {
+    const button = document.getElementById('touch-btn-fire');
+    if (typeof window.PointerEvent === 'function') {
+      this.#lifetime.listen(button, 'pointerdown', e => {
+        if (this.#firePointer !== null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.#firePointer = e.pointerId;
+        this.#firePrevX = e.clientX;
+        this.#firePrevY = e.clientY;
+        this.shooting = true;
+        this.#capture(e.currentTarget, e.pointerId);
+      });
+      this.#lifetime.listen(button, 'pointermove', e => {
+        if (e.pointerId !== this.#firePointer) return;
+        e.preventDefault();
+        this.lookDX += (e.clientX - this.#firePrevX) * LOOK_SCALE;
+        this.lookDY += (e.clientY - this.#firePrevY) * LOOK_SCALE;
+        this.#firePrevX = e.clientX;
+        this.#firePrevY = e.clientY;
+      });
+      const release = e => {
+        if (e.pointerId !== this.#firePointer) return;
+        this.#firePointer = null;
+        this.shooting = false;
+      };
+      this.#lifetime.listen(button, 'pointerup', release);
+      this.#lifetime.listen(button, 'pointercancel', release);
+      this.#lifetime.listen(button, 'lostpointercapture', release);
+      return;
+    }
+
+    this.#lifetime.listen(button, 'touchstart', e => {
+      if (this.#firePointer !== null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const touch = e.changedTouches.item(0);
+      if (!touch) return;
+      this.#firePointer = touch.identifier;
+      this.#firePrevX = touch.clientX;
+      this.#firePrevY = touch.clientY;
+      this.shooting = true;
+    }, { passive: false });
+    this.#lifetime.listen(button, 'touchmove', e => {
+      e.preventDefault();
+      this.#forChangedTouch(e, touch => {
+        if (touch.identifier !== this.#firePointer) return;
+        this.lookDX += (touch.clientX - this.#firePrevX) * LOOK_SCALE;
+        this.lookDY += (touch.clientY - this.#firePrevY) * LOOK_SCALE;
+        this.#firePrevX = touch.clientX;
+        this.#firePrevY = touch.clientY;
+      });
+    }, { passive: false });
+    const release = e => this.#forChangedTouch(e, touch => {
+      if (touch.identifier !== this.#firePointer) return;
+      this.#firePointer = null;
+      this.shooting = false;
+    });
+    this.#lifetime.listen(button, 'touchend', release, { passive: false });
+    this.#lifetime.listen(button, 'touchcancel', release, { passive: false });
   }
 
   #capture(target, pointerId) {
@@ -259,6 +326,7 @@ export class TouchControls {
   #resetState() {
     this.#resetMove();
     this.#resetLook();
+    this.#firePointer = null;
     this.lookDX = 0;
     this.lookDY = 0;
     this.shooting = false;

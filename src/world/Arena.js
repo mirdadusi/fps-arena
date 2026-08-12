@@ -42,6 +42,8 @@ export class Arena {
   get environment() { return this.#currentLayout?.environment || 'arena'; }
   get isConstrainedDevice() { return this.#renderProfile.constrained; }
   get aiInterval() { return this.#renderProfile.aiInterval; }
+  get meshDetail() { return this.#renderProfile.meshDetail; }
+  get renderProfile() { return this.#renderProfile; }
 
   constructor(layoutName = 'classic') {
     this.#currentLayout = ARENA_LAYOUTS[layoutName] || ARENA_LAYOUTS.classic;
@@ -65,7 +67,7 @@ export class Arena {
           max: new THREE.Vector3(x + w / 2, y + h, z + d / 2),
           ...options,
         });
-      });
+      }, this.#renderProfile.meshDetail);
       this.#proceduralWorld = village;
       this.#layoutMeshes.push(village.group);
       return;

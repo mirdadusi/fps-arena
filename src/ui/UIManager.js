@@ -10,12 +10,14 @@ export class UIManager {
   #goStats        = document.getElementById('go-stats');
   #goPersonalBest = document.getElementById('go-personal-best');
   #goScoreTable   = document.getElementById('go-scoretable');
+  #goCause        = document.getElementById('go-cause');
+  #respawnButton  = document.getElementById('respawn-game-btn');
   #lifetime       = new Lifetime();
 
   showBlocker()  { this.#blocker.style.display  = 'flex'; }
   hideBlocker()  { this.#blocker.style.display  = 'none'; }
 
-  showGameOver(stats) {
+  showGameOver(stats, cause = 'Eliminated in combat') {
     // Save before checking personal best
     const prevBest = PersistenceStore.getScores()[0]?.score ?? 0;
     PersistenceStore.saveScore({
@@ -28,6 +30,7 @@ export class UIManager {
 
     this.#goStats.textContent =
       `Score: ${stats.score}  |  Kills: ${stats.kills}  |  Time: ${stats.time}  |  Best Streak: ${stats.maxStreak}`;
+    if (this.#goCause) this.#goCause.textContent = cause;
 
     if (this.#goPersonalBest) {
       this.#goPersonalBest.style.display = stats.score > prevBest ? 'block' : 'none';
@@ -63,8 +66,19 @@ export class UIManager {
 
   hideGameOver() { this.#gameOver.style.display = 'none'; }
 
-  onGameOverClick(callback) {
-    this.#lifetime.listen(this.#gameOver, 'click', callback);
+  onRespawn(callback) {
+    let ignoreClickUntil = 0;
+    this.#lifetime.listen(this.#respawnButton, 'pointerdown', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      ignoreClickUntil = performance.now() + 500;
+      callback();
+    });
+    this.#lifetime.listen(this.#respawnButton, 'click', event => {
+      event.stopPropagation();
+      if (performance.now() < ignoreClickUntil) return;
+      callback();
+    });
   }
 
   destroy() {

@@ -15,6 +15,7 @@ export const Config = Object.freeze({
     stanceResponse: 14,
     radius: 0.4,
     maxHP: 100,
+    spawnProtection: 1.5,
   },
 
   // Legacy single-weapon fallback (used by enemy AI)

@@ -274,6 +274,19 @@ describe.sequential('WebSocket abuse and recovery boundary', () => {
     await closeAll(host, guest);
   });
 
+  it('relays only bounded respawn positions and resets server-side damage state', async () => {
+    const { host, guest, guestId } = await pairedRoom();
+    host.send('PLAYER_HIT', { targetId: guestId, damage: 100 });
+    await guest.next('PLAYER_HIT');
+    guest.send('PLAYER_RESPAWN', { position: { x: 12, y: 1.7, z: -8 } });
+    const respawn = await host.next('PLAYER_RESPAWN');
+    expect(respawn).toMatchObject({ playerId: guestId, position: { x: 12, y: 1.7, z: -8 } });
+
+    guest.send('PLAYER_RESPAWN', { position: { x: 1000, y: 0, z: 0 } });
+    expect(await host.none('PLAYER_RESPAWN')).toBe(true);
+    await closeAll(host, guest);
+  });
+
   it('rate-limits hit messages independently of the general budget', async () => {
     const { host, guest, guestId } = await pairedRoom();
     host.send('PLAYER_HIT', { targetId: guestId, damage: 1 });
