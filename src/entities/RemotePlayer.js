@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
 import { disposeObject3D } from '../rendering/disposeObject3D.js';
+import { getMeshDetailBudget } from '../rendering/MeshDetail.js';
 
 const PLAYER_COLORS = [0x4488ff, 0xff8844, 0x44ff88, 0xff44ff, 0xffff44, 0x44ffff, 0xff4444, 0x88ff44];
 export { PLAYER_COLORS };
@@ -21,11 +22,13 @@ export class RemotePlayer {
   #targetRotY = 0;
   #body; #head; #leftArm; #rightArm; #leftLeg; #rightLeg;
   #nameSprite; #hpBarBg; #hpBar;
+  #radialSegments = 6;
 
-  constructor(scene, id, name, colorIndex = 0) {
+  constructor(scene, id, name, colorIndex = 0, meshDetail = 'high') {
     this.id = id;
     this.name = name;
     this.color = PLAYER_COLORS[colorIndex % PLAYER_COLORS.length];
+    this.#radialSegments = getMeshDetailBudget(meshDetail).botRadialSegments;
     this.scene = scene;
     this.#build();
     this.#buildNameLabel();
@@ -60,8 +63,8 @@ export class RemotePlayer {
     this.#rightArm = new THREE.Group();
     [-1, 1].forEach(side => {
       const arm = side === -1 ? this.#leftArm : this.#rightArm;
-      arm.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.4, 6), darkMat), { position: new THREE.Vector3(0, -0.2, 0) }));
-      arm.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.35, 6), mainMat), { position: new THREE.Vector3(0, -0.55, 0) }));
+      arm.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.4, this.#radialSegments), darkMat), { position: new THREE.Vector3(0, -0.2, 0) }));
+      arm.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.35, this.#radialSegments), mainMat), { position: new THREE.Vector3(0, -0.55, 0) }));
       arm.position.set(side * 0.45, 1.35, 0);
       this.group.add(arm);
     });
@@ -74,8 +77,8 @@ export class RemotePlayer {
     this.#rightLeg = new THREE.Group();
     [-1, 1].forEach(side => {
       const leg = side === -1 ? this.#leftLeg : this.#rightLeg;
-      leg.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.4, 6), darkMat), { position: new THREE.Vector3(0, -0.2, 0) }));
-      leg.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.35, 6), mainMat), { position: new THREE.Vector3(0, -0.55, 0) }));
+      leg.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.4, this.#radialSegments), darkMat), { position: new THREE.Vector3(0, -0.2, 0) }));
+      leg.add(Object.assign(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.35, this.#radialSegments), mainMat), { position: new THREE.Vector3(0, -0.55, 0) }));
       const foot = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.06, 0.22), darkMat);
       foot.position.set(0, -0.76, -0.03);
       leg.add(foot);

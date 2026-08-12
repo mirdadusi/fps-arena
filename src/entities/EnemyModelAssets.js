@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getMeshDetailBudget } from '../rendering/MeshDetail.js';
 
 /**
  * Immutable GPU resources shared by every bot in one game. A five-bot match
@@ -7,24 +8,27 @@ import * as THREE from 'three';
 export class EnemyModelAssets {
   #destroyed = false;
 
-  constructor(portraitTexture = null) {
+  constructor(portraitTexture = null, meshDetail = 'high') {
+    const budget = getMeshDetailBudget(meshDetail);
+    const radial = budget.botRadialSegments;
+    const joints = budget.botJointSegments;
     this.geometries = {
-      torso: new THREE.CylinderGeometry(0.42, 0.34, 0.82, 6),
+      torso: new THREE.CylinderGeometry(0.42, 0.34, 0.82, radial),
       chestPlate: new THREE.BoxGeometry(0.62, 0.43, 0.12),
       abdomen: new THREE.BoxGeometry(0.42, 0.28, 0.38),
-      pelvis: new THREE.CylinderGeometry(0.3, 0.34, 0.22, 6),
+      pelvis: new THREE.CylinderGeometry(0.3, 0.34, 0.22, radial),
       helmet: new THREE.BoxGeometry(0.46, 0.38, 0.48),
       facePlate: new THREE.BoxGeometry(0.36, 0.18, 0.055),
       crest: new THREE.BoxGeometry(0.08, 0.14, 0.36),
-      neck: new THREE.CylinderGeometry(0.11, 0.15, 0.18, 8),
+      neck: new THREE.CylinderGeometry(0.11, 0.15, 0.18, joints),
       shoulder: new THREE.BoxGeometry(0.34, 0.2, 0.42),
-      limb: new THREE.CylinderGeometry(0.085, 0.11, 0.43, 8),
+      limb: new THREE.CylinderGeometry(0.085, 0.11, 0.43, joints),
       shin: new THREE.BoxGeometry(0.18, 0.34, 0.2),
       boot: new THREE.BoxGeometry(0.2, 0.12, 0.36),
       backpack: new THREE.BoxGeometry(0.48, 0.62, 0.18),
-      exhaust: new THREE.CylinderGeometry(0.055, 0.075, 0.25, 8),
+      exhaust: new THREE.CylinderGeometry(0.055, 0.075, 0.25, radial),
       rifle: new THREE.BoxGeometry(0.16, 0.18, 0.62),
-      barrel: new THREE.CylinderGeometry(0.028, 0.04, 0.46, 8),
+      barrel: new THREE.CylinderGeometry(0.028, 0.04, 0.46, radial),
       optic: new THREE.BoxGeometry(0.08, 0.08, 0.16),
       core: new THREE.OctahedronGeometry(0.095, 0),
       portrait: new THREE.PlaneGeometry(0.34, 0.28),

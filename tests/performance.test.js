@@ -5,7 +5,7 @@ import { EnemyModelAssets } from '../src/entities/EnemyModelAssets.js';
 import { PhysicsSystem } from '../src/systems/PhysicsSystem.js';
 import { BulletSystem } from '../src/systems/BulletSystem.js';
 import { createProceduralTexture } from '../src/rendering/ProceduralTextures.js';
-import { createRenderProfile, isAppleTouchDevice } from '../src/rendering/RenderProfile.js';
+import { createRenderProfile, isAppleTouchDevice, selectMeshDetail } from '../src/rendering/RenderProfile.js';
 import { VillageWorld } from '../src/world/VillageWorld.js';
 
 describe('continuous collision', () => {
@@ -110,5 +110,42 @@ describe('mobile render profile', () => {
     expect(profile.antialias).toBe(false);
     expect(profile.shadows).toBe(false);
     expect(profile.aiInterval).toBeCloseTo(1 / 30);
+    expect(profile.meshDetail).toBe('balanced');
+    expect(profile.dynamicEffectLights).toBe(false);
+  });
+
+  it('reduces both framebuffer and mesh budgets on older mobile hardware', () => {
+    const profile = createRenderProfile({
+      userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X)',
+      platform: 'iPad', maxTouchPoints: 5,
+      hardwareConcurrency: 4, deviceMemory: null,
+      devicePixelRatio: 2, coarsePointer: true,
+    });
+    expect(profile.meshDetail).toBe('low');
+    expect(profile.pixelRatio).toBe(0.72);
+    expect(profile.minPixelRatio).toBe(0.5);
+    expect(selectMeshDetail({ hardwareConcurrency: 12, deviceMemory: 16 })).toBe('high');
+  });
+
+  it('loads fewer Village and bot vertices for the low mobile tier', () => {
+    const lowScene = new THREE.Scene();
+    const highScene = new THREE.Scene();
+    const lowVillage = new VillageWorld(lowScene, () => {}, 'low');
+    const highVillage = new VillageWorld(highScene, () => {}, 'high');
+    const vertexCount = world => {
+      let count = 0;
+      world.group.traverse(object => { if (object.isMesh) count += object.geometry.attributes.position.count; });
+      return count;
+    };
+    expect(vertexCount(lowVillage)).toBeLessThan(vertexCount(highVillage));
+
+    const lowBots = new EnemyModelAssets(null, 'low');
+    const highBots = new EnemyModelAssets(null, 'high');
+    expect(lowBots.geometries.torso.attributes.position.count)
+      .toBeLessThan(highBots.geometries.torso.attributes.position.count);
+    lowVillage.destroy();
+    highVillage.destroy();
+    lowBots.dispose();
+    highBots.dispose();
   });
 });

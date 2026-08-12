@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Config } from '../Config.js';
-import { disposeObject3D } from '../rendering/disposeObject3D.js';
+import { getMeshDetailBudget } from '../rendering/MeshDetail.js';
 
 /**
  * GrenadeSystem — throwable grenades with arc trajectory, bounce, and explosion.
@@ -11,14 +11,21 @@ export class GrenadeSystem {
   #scene;
   #physics;
   #geo = new THREE.SphereGeometry(0.12, 8, 8);
+  #explosionGeo;
   #mat = new THREE.MeshStandardMaterial({ color: 0x446644, roughness: 0.5, metalness: 0.3 });
   #worldPosition = new THREE.Vector3();
+  #dynamicEffectLights = true;
 
   count = Config.grenade.maxCount;
 
-  constructor(scene, physics) {
+  constructor(scene, physics, renderProfile = {}) {
     this.#scene = scene;
     this.#physics = physics;
+    const budget = getMeshDetailBudget(renderProfile.meshDetail);
+    this.#explosionGeo = new THREE.SphereGeometry(
+      1, budget.explosionSegments, budget.explosionSegments,
+    );
+    this.#dynamicEffectLights = renderProfile.dynamicEffectLights !== false;
   }
 
   throw(origin, direction, yaw, pitch) {
@@ -108,11 +115,11 @@ export class GrenadeSystem {
       const scale = 1 + (1 - e.life / e.maxLife) * 3;
       e.mesh.scale.setScalar(scale);
       e.mesh.material.opacity = e.life / e.maxLife;
-      e.light.intensity = (e.life / e.maxLife) * 20;
+      if (e.light) e.light.intensity = (e.life / e.maxLife) * 20;
       if (e.life <= 0) {
         this.#scene.remove(e.mesh);
-        this.#scene.remove(e.light);
-        disposeObject3D(e.mesh);
+        if (e.light) this.#scene.remove(e.light);
+        e.mesh.material.dispose();
         this.#explosions.splice(i, 1);
       }
     }
@@ -123,15 +130,17 @@ export class GrenadeSystem {
   #explode(pos, playerPos, enemies, remotePlayers, results) {
     // Visual explosion
     const explosionMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 12, 12),
+      this.#explosionGeo,
       new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 1 }),
     );
     explosionMesh.position.copy(pos);
     this.#scene.add(explosionMesh);
 
-    const light = new THREE.PointLight(0xff6600, 20, 15);
-    light.position.copy(pos);
-    this.#scene.add(light);
+    const light = this.#dynamicEffectLights ? new THREE.PointLight(0xff6600, 20, 15) : null;
+    if (light) {
+      light.position.copy(pos);
+      this.#scene.add(light);
+    }
 
     this.#explosions.push({ mesh: explosionMesh, light, life: 0.5, maxLife: 0.5 });
 
@@ -180,8 +189,8 @@ export class GrenadeSystem {
     this.#grenades.length = 0;
     for (const e of this.#explosions) {
       this.#scene.remove(e.mesh);
-      this.#scene.remove(e.light);
-      disposeObject3D(e.mesh);
+      if (e.light) this.#scene.remove(e.light);
+      e.mesh.material.dispose();
     }
     this.#explosions.length = 0;
     this.count = Config.grenade.maxCount;
@@ -192,6 +201,7 @@ export class GrenadeSystem {
   dispose() {
     this.reset();
     this.#geo.dispose();
+    this.#explosionGeo.dispose();
     this.#mat.dispose();
   }
 }

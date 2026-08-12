@@ -102,6 +102,7 @@ export class Game {
   #gameTime  = 0;
   #hitStreak = 0;
   #maxStreak = 0;
+  #spawnProtection = 0;
   #playerName;
   #skinIndex = 0;
 
@@ -128,14 +129,14 @@ export class Game {
     this.#particles = new ParticleSystem(this.#arena.scene);
     this.#audio    = new AudioSystem();
     this.#pickups  = new PickupSystem(this.#arena.scene, (x, z) => this.#arena.getGroundHeight(x, z));
-    this.#grenades = new GrenadeSystem(this.#arena.scene, this.#physics);
+    this.#grenades = new GrenadeSystem(this.#arena.scene, this.#physics, this.#arena.renderProfile);
     this.#teams    = new TeamManager(this.#arena.scene);
 
     if (config.botPortrait) {
       this.#portraitTexture = new THREE.TextureLoader().load(config.botPortrait);
       this.#portraitTexture.colorSpace = THREE.SRGBColorSpace;
     }
-    this.#enemyAssets = new EnemyModelAssets(this.#portraitTexture);
+    this.#enemyAssets = new EnemyModelAssets(this.#portraitTexture, this.#arena.meshDetail);
     this.#coverPoints = extractCoverPoints(this.#arena.colliders);
 
     // Team / game mode setup
@@ -202,7 +203,7 @@ export class Game {
     let colorIdx = 0;
     for (const p of players) {
       if (p.id === this.#playerId) { colorIdx++; continue; }
-      const rp = new RemotePlayer(this.#arena.scene, p.id, p.name, colorIdx++);
+      const rp = new RemotePlayer(this.#arena.scene, p.id, p.name, colorIdx++, this.#arena.meshDetail);
       rp._team = p.team || null;
       this.#remotePlayers.set(p.id, rp);
     }
@@ -211,7 +212,11 @@ export class Game {
 
     on('PLAYER_STATE', msg => {
       const rp = this.#remotePlayers.get(msg.playerId);
-      if (rp) rp.setTarget(msg.position, msg.rotation.y);
+      if (rp?.alive) rp.setTarget(msg.position, msg.rotation.y);
+    });
+
+    on('PLAYER_RESPAWN', msg => {
+      this.#remotePlayers.get(msg.playerId)?.respawn(msg.position);
     });
 
     on('PLAYER_SHOOT', msg => {
@@ -227,7 +232,10 @@ export class Game {
     on('PLAYER_JOINED', msg => {
       if (msg.playerId === this.#playerId) return;
       if (!this.#remotePlayers.has(msg.playerId)) {
-        const rp = new RemotePlayer(this.#arena.scene, msg.playerId, msg.name, this.#remotePlayers.size + 1);
+        const rp = new RemotePlayer(
+          this.#arena.scene, msg.playerId, msg.name,
+          this.#remotePlayers.size + 1, this.#arena.meshDetail,
+        );
         rp._team = msg.team || null;
         this.#remotePlayers.set(msg.playerId, rp);
       }
@@ -244,14 +252,13 @@ export class Game {
 
     on('PLAYER_HIT', msg => {
       if (msg.targetId === this.#playerId) {
-        this.#player.takeDamage(msg.damage);
-        this.#hud.flashDamage();
+        this.#applyPlayerDamage(msg.damage, 'Eliminated by another player');
       }
     });
 
     on('PLAYER_KILLED', msg => {
       if (msg.targetId === this.#playerId) {
-        this.#deaths++;
+        this.#enterPlayerDeath('Eliminated by another player');
         // Drop flag if carrying in CTF
         if (this.#teams.mode === 'ctf') {
           const dropped = this.#teams.dropFlag(this.#playerId, this.#player.position);
@@ -263,6 +270,7 @@ export class Game {
         this.#score += 100;
         this.#hud.addKillFeed('Enemy player eliminated +100');
       }
+      if (msg.targetId !== this.#playerId) this.#remotePlayers.get(msg.targetId)?.kill();
     });
 
     on('CHAT_MESSAGE', msg => {
@@ -385,7 +393,7 @@ export class Game {
     onBus(GameEvents.GAME_STARTED,     () => this.#audio.startAmbient());
     onBus(GameEvents.GAME_OVER,        () => this.#audio.stopAmbient());
 
-    this.#ui.onGameOverClick(() => this.#resetGame());
+    this.#ui.onRespawn(() => this.#respawnPlayer());
     this.#lifetime.listen(window, 'resize', () => this.#arena.onResize());
 
     this.#lifetime.listen(document.getElementById('resume-game-btn'), 'click', e => {
@@ -464,28 +472,44 @@ export class Game {
     if (this.#gameOver) return false;
     if (!this.#bullets.testPlayerHit(bullet, this.#arena.camera.position)) return false;
 
+    // A fresh spawn still absorbs the projectile so it cannot hit again on
+    // the first vulnerable frame, but does not take damage.
+    if (this.#spawnProtection > 0) return true;
+
     const shieldMul = this.#pickups.getShieldMultiplier();
     const diff = this.#difficulty.getProfile(this.#kills);
     const dmg = Math.round(diff.bulletDamage * shieldMul);
-    const dead = this.#player.takeDamage(dmg);
     this.#hitStreak = 0;
     this.#particles.spawn(bullet.mesh.position, 0xff0000, Config.particles.playerHitCount);
+    this.#applyPlayerDamage(dmg, 'Eliminated by enemy fire');
+    return true;
+  }
+
+  /** Every damage source must pass here so lethal feedback cannot be skipped. */
+  #applyPlayerDamage(amount, cause) {
+    if (this.#gameOver || this.#spawnProtection > 0 || !Number.isFinite(amount) || amount <= 0) return false;
+    const dead = this.#player.takeDamage(amount);
     this.#hud.flashDamage();
     this.#bus.emit(GameEvents.PLAYER_DAMAGED);
+    if (dead) this.#enterPlayerDeath(cause);
+    return dead;
+  }
 
-    if (dead) {
-      this.#gameOver = true;
-      this.#deaths++;
-      document.exitPointerLock();
-      this.#bus.emit(GameEvents.GAME_OVER);
-      const mins = Math.floor(this.#gameTime / 60);
-      const secs = Math.floor(this.#gameTime % 60).toString().padStart(2, '0');
-      this.#ui.showGameOver({
-        score: this.#score, kills: this.#kills,
-        time: `${mins}:${secs}`, maxStreak: this.#maxStreak,
-      });
-    }
-    return true;
+  #enterPlayerDeath(cause) {
+    if (this.#gameOver) return;
+    this.#gameOver = true;
+    this.#player.hp = 0;
+    this.#deaths++;
+    this.#primaryDown = false;
+    this.#touch.releaseAll();
+    document.exitPointerLock?.();
+    this.#bus.emit(GameEvents.GAME_OVER);
+    const mins = Math.floor(this.#gameTime / 60);
+    const secs = Math.floor(this.#gameTime % 60).toString().padStart(2, '0');
+    this.#ui.showGameOver({
+      score: this.#score, kills: this.#kills,
+      time: `${mins}:${secs}`, maxStreak: this.#maxStreak,
+    }, cause);
   }
 
   #onEnemyHit(bullet) {
@@ -569,7 +593,7 @@ export class Game {
     const playerDist = pos.distanceTo(this.#arena.camera.position);
     if (playerDist < radius) {
       const splashDmg = Math.round(wpnDef.bulletDamage * 0.5 * (1 - playerDist / radius));
-      if (splashDmg > 0) this.#player.takeDamage(splashDmg);
+      if (splashDmg > 0) this.#applyPlayerDamage(splashDmg, 'Caught in a rocket explosion');
     }
   }
 
@@ -616,36 +640,53 @@ export class Game {
     if (this.#network) this.#network.sendPickupCollected(pickup.id);
   }
 
-  // ── Reset ─────────────────────────────────────────────────
+  // ── Player respawn ────────────────────────────────────────
 
-  #resetGame() {
+  #respawnPlayer() {
     this.#player.reset();
     this.#weapon.reset();
     this.#bullets.clearAll();
-    this.#pickups.reset();
     this.#grenades.reset();
-    this.#teams.reset();
-    this.#score = 0;
-    this.#kills = 0;
-    this.#deaths = 0;
-    this.#gameTime = 0;
     this.#hitStreak = 0;
-    this.#maxStreak = 0;
+    this.#spawnProtection = Config.player.spawnProtection;
     this.#gameOver = false;
+    this.#touch.releaseAll();
     this.#ui.hideGameOver();
     this.#hud.clearKillFeed();
     this.#audio.startAmbient();
 
-    for (const bot of this.#bots) this.#respawnBot(bot);
-
     if (this.#arena.playerSpawns.length) {
-      const sp = this.#arena.playerSpawns[0];
+      const sp = this.#selectSafePlayerSpawn();
       this.#player.position.set(sp.x, this.#arena.getGroundHeight(sp.x, sp.z) + Config.player.height, sp.z);
     }
+
+    this.#network?.sendPlayerRespawn(this.#player.position);
+
+    this.#hud.addKillFeed('Respawned — brief damage protection');
 
     if (!this.#touch.active) {
       this.#requestPointerLock();
     }
+  }
+
+  /** Choose the spawn whose nearest living bot is furthest away. */
+  #selectSafePlayerSpawn() {
+    let best = this.#arena.playerSpawns[0];
+    let bestClearance = -1;
+    for (const spawn of this.#arena.playerSpawns) {
+      let clearance = Infinity;
+      for (const bot of this.#bots) {
+        if (!bot.enemy.alive) continue;
+        const dx = spawn.x - bot.enemy.position.x;
+        const dz = spawn.z - bot.enemy.position.z;
+        clearance = Math.min(clearance, dx * dx + dz * dz);
+      }
+      if (clearance > bestClearance) {
+        best = spawn;
+        bestClearance = clearance;
+      }
+    }
+    return best;
   }
 
   // ── Scoreboard data ───────────────────────────────────────
@@ -795,8 +836,7 @@ export class Game {
       const grenadeResults = this.#grenades.update(dt, this.#arena.camera.position, this.#bots, this.#remotePlayers);
       if (grenadeResults.explosionCount > 0) this.#bus.emit(GameEvents.GRENADE_EXPLODE);
       if (grenadeResults.playerDamage > 0) {
-        this.#player.takeDamage(grenadeResults.playerDamage);
-        this.#hud.flashDamage();
+        this.#applyPlayerDamage(grenadeResults.playerDamage, 'Caught in a grenade explosion');
       }
       for (const hit of grenadeResults.enemyHits) {
         const dead = hit.bot.enemy.takeDamage(hit.damage);
@@ -858,6 +898,7 @@ export class Game {
       }
 
       this.#gameTime += dt;
+      this.#spawnProtection = Math.max(0, this.#spawnProtection - dt);
     }
 
     // Bullets

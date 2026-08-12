@@ -49,8 +49,8 @@ describe('TouchControls', () => {
     dispatchPointer(zone, 'pointermove', { pointerId: 7, clientX: 425, clientY: 210 });
     dispatchPointer(zone, 'pointerup', { pointerId: 7, clientX: 425, clientY: 210 });
 
-    expect(controls.lookDX).toBeCloseTo(25 * 0.65);
-    expect(controls.lookDY).toBeCloseTo(10 * 0.65);
+    expect(controls.lookDX).toBeCloseTo(25 * 0.82);
+    expect(controls.lookDY).toBeCloseTo(10 * 0.82);
     expect(controls.shooting).toBe(false);
     controls.consumeFrame();
     expect(controls.lookDX).toBe(0);
@@ -64,8 +64,12 @@ describe('TouchControls', () => {
     dispatchPointer(fire, 'pointerdown', { pointerId: 2, clientX: 700, clientY: 500 });
     expect(controls.shooting).toBe(true);
 
+    dispatchPointer(fire, 'pointermove', { pointerId: 2, clientX: 712, clientY: 494 });
+    expect(controls.lookDX).toBeCloseTo(12 * 0.82);
+    expect(controls.lookDY).toBeCloseTo(-6 * 0.82);
+
     dispatchPointer(look, 'pointermove', { pointerId: 1, clientX: 520, clientY: 250 });
-    expect(controls.lookDX).toBeGreaterThan(0);
+    expect(controls.lookDX).toBeCloseTo(32 * 0.82);
     dispatchPointer(fire, 'pointerup', { pointerId: 2, clientX: 700, clientY: 500 });
     expect(controls.shooting).toBe(false);
   });

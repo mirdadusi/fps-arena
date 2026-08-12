@@ -4,6 +4,7 @@ import { villageGroundHeight } from './VillageTerrain.js';
 import { disposeObject3D } from '../rendering/disposeObject3D.js';
 import { createProceduralTexture } from '../rendering/ProceduralTextures.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { getMeshDetailBudget } from '../rendering/MeshDetail.js';
 
 /**
  * Procedural, asset-free village environment. Geometry creation lives outside
@@ -12,23 +13,26 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 export class VillageWorld {
   group = new THREE.Group();
   #destroyed = false;
+  #meshBudget;
 
-  constructor(scene, addCollider) {
+  constructor(scene, addCollider, meshDetail = 'high') {
     this.scene = scene;
     this.addCollider = addCollider;
+    this.#meshBudget = getMeshDetailBudget(meshDetail);
+    const radial = this.#meshBudget.environmentRadialSegments;
     // Repeated scenery uses one GPU geometry per shape and is transformed by
     // each mesh. This replaces more than a hundred near-identical buffers.
     this.geometries = {
       box: new THREE.BoxGeometry(1, 1, 1),
       plane: new THREE.PlaneGeometry(1, 1),
-      trunk: new THREE.CylinderGeometry(0.28, 0.42, 1, 7),
-      crown: new THREE.ConeGeometry(1, 1, 7),
+      trunk: new THREE.CylinderGeometry(0.28, 0.42, 1, radial),
+      crown: new THREE.ConeGeometry(1, 1, radial),
       shrub: new THREE.DodecahedronGeometry(1, 0),
-      rock: new THREE.DodecahedronGeometry(1, 1),
-      log: new THREE.CylinderGeometry(0.42, 0.5, 1, 8),
-      bale: new THREE.CylinderGeometry(0.8, 0.8, 1, 12),
+      rock: new THREE.DodecahedronGeometry(1, this.#meshBudget.rockDetail),
+      log: new THREE.CylinderGeometry(0.42, 0.5, 1, radial),
+      bale: new THREE.CylinderGeometry(0.8, 0.8, 1, radial),
       roof: new THREE.ConeGeometry(1, 1, 4),
-      orb: new THREE.SphereGeometry(0.18, 8, 6),
+      orb: new THREE.SphereGeometry(0.18, radial, Math.max(4, radial - 2)),
     };
     this.materials = this.#createMaterials();
     this.group.name = 'village-world';
@@ -80,7 +84,8 @@ export class VillageWorld {
 
   #buildTerrain() {
     const size = Config.arena.size;
-    const geometry = new THREE.PlaneGeometry(size, size, 40, 40);
+    const segments = this.#meshBudget.terrainSegments;
+    const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
     geometry.rotateX(-Math.PI / 2);
     const positions = geometry.attributes.position;
     for (let i = 0; i < positions.count; i++) {
@@ -105,12 +110,15 @@ export class VillageWorld {
 
     // Stone well: useful circular cover in the village square.
     const well = this.#add(new THREE.Mesh(
-      new THREE.CylinderGeometry(2.1, 2.25, 1.25, 18, 1, true),
+      new THREE.CylinderGeometry(2.1, 2.25, 1.25, this.#meshBudget.environmentRadialSegments, 1, true),
       this.materials.stone,
     ));
     well.position.set(0, 0.625, 0);
     this.addCollider(0, 0, 0, 4.1, 1.25, 4.1);
-    const roof = this.#add(new THREE.Mesh(new THREE.ConeGeometry(2.8, 1.1, 8), this.materials.roof));
+    const roof = this.#add(new THREE.Mesh(
+      new THREE.ConeGeometry(2.8, 1.1, this.#meshBudget.environmentRadialSegments),
+      this.materials.roof,
+    ));
     roof.position.set(0, 3.5, 0);
     this.#box(-1.8, 1.2, 0, 0.18, 2.2, 0.18, this.materials.wood);
     this.#box(1.8, 1.2, 0, 0.18, 2.2, 0.18, this.materials.wood);
