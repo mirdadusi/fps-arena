@@ -144,6 +144,7 @@ export class Game {
 
     this.#pickups.spawnFromLayout(this.#arena.pickupSpots);
     this.#spawnBots(config.botCount ?? 1);
+    this.#particles.warm(this.#arena.renderer, this.#arena.camera);
 
     // UI
     this.#hud       = new HUD();
@@ -631,12 +632,20 @@ export class Game {
         this.#weapon.ammo = Math.min(this.#weapon.currentDef.maxAmmo, this.#weapon.ammo + pickup.def.value);
         break;
     }
-    this.#hud.addKillFeed(`Picked up ${pickup.def.name}`);
     this.#particles.spawn(
-      new THREE.Vector3(pickup.spot.x, this.#arena.getGroundHeight(pickup.spot.x, pickup.spot.z) + 1, pickup.spot.z),
+      this.#scratchOrigin.set(
+        pickup.spot.x,
+        this.#arena.getGroundHeight(pickup.spot.x, pickup.spot.z) + 1,
+        pickup.spot.z,
+      ),
       pickup.def.color, 10,
     );
-    this.#bus.emit(GameEvents.PICKUP_COLLECTED, { type: pickup.type });
+    // Web Audio nodes and feed DOM are cosmetic. Schedule them after the
+    // collection render so mobile Safari cannot turn feedback into a hitch.
+    this.#lifetime.timeout(() => {
+      this.#hud.addKillFeed(`Picked up ${pickup.def.name}`);
+      this.#bus.emit(GameEvents.PICKUP_COLLECTED, { type: pickup.type });
+    }, 0);
     if (this.#network) this.#network.sendPickupCollected(pickup.id);
   }
 

@@ -7,6 +7,8 @@ import { BulletSystem } from '../src/systems/BulletSystem.js';
 import { createProceduralTexture } from '../src/rendering/ProceduralTextures.js';
 import { createRenderProfile, isAppleTouchDevice, selectMeshDetail } from '../src/rendering/RenderProfile.js';
 import { VillageWorld } from '../src/world/VillageWorld.js';
+import { PickupSystem } from '../src/pickups/PickupSystem.js';
+import { ParticleSystem } from '../src/systems/ParticleSystem.js';
 
 describe('continuous collision', () => {
   const thinWall = {
@@ -92,6 +94,39 @@ describe('shared rendering resources', () => {
     expect(meshes.every(mesh => mesh.name.startsWith('village-static-batch-'))).toBe(true);
     expect(village.group.children.some(object => object.isPointLight)).toBe(false);
     village.destroy();
+  });
+
+  it('keeps the scene light count stable when a pickup is collected', () => {
+    const scene = new THREE.Scene();
+    const pickups = new PickupSystem(scene);
+    pickups.spawnFromLayout([
+      { x: 0, z: 0, type: 'speed' },
+      { x: 5, z: 0, type: 'shield' },
+    ]);
+    const pointLights = () => {
+      let count = 0;
+      scene.traverse(object => { if (object.isPointLight) count++; });
+      return count;
+    };
+    expect(pointLights()).toBe(0);
+    pickups.collect(0);
+    expect(pointLights()).toBe(0);
+    pickups.dispose();
+  });
+
+  it('serves pickup particles entirely from a fixed object/material pool', () => {
+    const scene = new THREE.Scene();
+    const particles = new ParticleSystem(scene);
+    expect(particles.pooledCount).toBe(96);
+    expect(particles.materialCount).toBe(8);
+    particles.spawn(new THREE.Vector3(), 0xff44ff, 10);
+    expect(particles.activeCount).toBe(10);
+    expect(particles.pooledCount).toBe(86);
+    expect(particles.materialCount).toBe(8);
+    particles.update(2);
+    expect(particles.activeCount).toBe(0);
+    expect(particles.pooledCount).toBe(96);
+    particles.dispose();
   });
 });
 
