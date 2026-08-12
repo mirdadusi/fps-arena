@@ -8,6 +8,7 @@ import { Lifetime } from '../core/Lifetime.js';
 export class HUD {
   #els;
   #lifetime = new Lifetime();
+  #powerupSlots = [];
 
   constructor() {
     this.#els = {
@@ -27,6 +28,7 @@ export class HUD {
       teamScores: document.getElementById('team-scores'),
       weaponSlots: document.getElementById('weapon-slots'),
     };
+    this.#preparePowerupSlots();
   }
 
   update(state, diff) {
@@ -93,16 +95,45 @@ export class HUD {
   }
 
   #updatePowerups(effects) {
+    for (let i = 0; i < this.#powerupSlots.length; i++) {
+      const slot = this.#powerupSlots[i];
+      const e = effects[i];
+      if (!e) {
+        slot.el.style.display = 'none';
+        continue;
+      }
+      const pct = Math.max(0, (e.remaining / e.total) * 100);
+      slot.el.style.display = 'block';
+      slot.el.style.borderColor = e.css;
+      slot.name.style.color = e.css;
+      slot.name.textContent = e.name;
+      slot.fill.style.width = `${pct}%`;
+      slot.fill.style.background = e.css;
+      slot.time.textContent = `${e.remaining.toFixed(1)}s`;
+    }
+  }
+
+  /** Allocate the maximum three timed-effect rows before gameplay begins. */
+  #preparePowerupSlots() {
     const bar = this.#els.powerupBar;
     if (!bar) return;
-    bar.innerHTML = '';
-    for (const e of effects) {
-      const pct = Math.max(0, (e.remaining / e.total) * 100);
+    bar.replaceChildren();
+    for (let i = 0; i < 3; i++) {
       const el = document.createElement('div');
       el.className = 'powerup-indicator';
-      el.style.borderColor = e.css;
-      el.innerHTML = `<div class="powerup-name" style="color:${e.css}">${e.name}</div><div class="powerup-timer-bg"><div class="powerup-timer-fill" style="width:${pct}%;background:${e.css}"></div></div><div class="powerup-time">${e.remaining.toFixed(1)}s</div>`;
+      el.style.display = 'none';
+      const name = document.createElement('div');
+      name.className = 'powerup-name';
+      const timerBg = document.createElement('div');
+      timerBg.className = 'powerup-timer-bg';
+      const fill = document.createElement('div');
+      fill.className = 'powerup-timer-fill';
+      const time = document.createElement('div');
+      time.className = 'powerup-time';
+      timerBg.appendChild(fill);
+      el.append(name, timerBg, time);
       bar.appendChild(el);
+      this.#powerupSlots.push({ el, name, fill, time });
     }
   }
 
@@ -140,5 +171,6 @@ export class HUD {
     this.clearKillFeed();
     this.#els.hitMarker?.classList.remove('show');
     document.getElementById('damage-overlay')?.classList.remove('hit');
+    this.#powerupSlots.length = 0;
   }
 }

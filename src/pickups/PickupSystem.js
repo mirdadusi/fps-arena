@@ -45,10 +45,6 @@ export class PickupSystem {
       const mesh = this.#createMesh(spot.type, def);
       group.add(mesh);
 
-      const light = new THREE.PointLight(def.glow, 3, 6);
-      light.position.y = 0.2;
-      group.add(light);
-
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(0.5, 0.7, 16),
         new THREE.MeshBasicMaterial({ color: def.glow, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
@@ -58,7 +54,7 @@ export class PickupSystem {
       group.add(ring);
 
       this.#scene.add(group);
-      this.#pickups.push({ id: i, type: spot.type, def, group, mesh, light, ring, baseY, active: true, respawnTimer: 0, spot });
+      this.#pickups.push({ id: i, type: spot.type, def, group, mesh, ring, baseY, active: true, respawnTimer: 0, spot });
     });
   }
 
@@ -96,7 +92,6 @@ export class PickupSystem {
       if (p.active) {
         p.group.rotation.y = now * 1.5;
         p.group.position.y = p.baseY + Math.sin(now * 2 + p.id) * 0.15;
-        p.light.intensity = 2.5 + Math.sin(now * 3 + p.id * 0.7);
         p.ring.material.opacity = 0.3 + Math.sin(now * 2 + p.id) * 0.15;
 
         const dx = playerPos.x - p.spot.x;
